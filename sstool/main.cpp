@@ -814,13 +814,16 @@ void runMacroSoftwareScan() {
     con::dim("  1. Running processes (exe name match)");
     con::dim("  2. Open window titles (catches renamed executables)");
     con::dim("  3. Installed programs via Windows registry");
+    con::dim("When a match is found, this scan opens the evidence location.");
+    con::dim("  - AutoHotkey / generic macro hits open their folder");
+    con::dim("  - 198M Macro / Zenith Macro hits open the app itself");
     std::cout << "\n";
-    con::dim("Keywords searched: '198m macro', '198macro', 'zenith macro'\n");
+    con::dim("Keywords searched: '198m macro', '198macro', 'zenith macro', 'autohotkey', '.ahk'\n");
 
     con::step(2, 3, "Scanning Running Processes & Window Titles");
 
     static const std::vector<std::string> macroKeywords = {
-        "198m macro", "198macro", "zenith macro"
+        "198m macro", "198macro", "zenith macro", "auto hotkey", "autohotkey", ".ahk"
     };
 
     auto procHits    = scanRunningProcesses(macroKeywords);
@@ -828,16 +831,20 @@ void runMacroSoftwareScan() {
 
     if (!procHits.empty()) {
         con::subheader("Running Process Matches");
-        for (const auto& h : procHits)
+        for (const auto& h : procHits) {
             con::bad("Process: " + h.name + "  (PID " + std::to_string(h.pid) + ")");
+            if (!h.path.empty()) con::dim("Path: " + h.path);
+        }
     } else {
         con::ok("No macro processes running.");
     }
 
     if (!winHits.empty()) {
         con::subheader("Window Title Matches");
-        for (const auto& h : winHits)
+        for (const auto& h : winHits) {
             con::bad("Window: \"" + h.name + "\"  (PID " + std::to_string(h.pid) + ")");
+            if (!h.path.empty()) con::dim("Path: " + h.path);
+        }
     } else {
         con::ok("No macro-related window titles found.");
     }
@@ -848,13 +855,34 @@ void runMacroSoftwareScan() {
 
     if (!installHits.empty()) {
         con::subheader("Installed Program Matches");
-        for (const auto& h : installHits)
+        for (const auto& h : installHits) {
             con::bad("Installed: " + h.name);
+            if (!h.path.empty()) con::dim("Path: " + h.path);
+        }
     } else {
         con::ok("No macro software found in installed programs.");
     }
 
     int total = (int)(procHits.size() + winHits.size() + installHits.size());
+    if (total > 0) {
+        con::subheader("Opening Evidence");
+        int opened = 0;
+        std::vector<MacroHit> allHits;
+        allHits.insert(allHits.end(), procHits.begin(), procHits.end());
+        allHits.insert(allHits.end(), winHits.begin(), winHits.end());
+        allHits.insert(allHits.end(), installHits.begin(), installHits.end());
+
+        for (const auto& hit : allHits) {
+            if (openEvidencePath(hit)) {
+                opened++;
+                if (is198mOrZenith(hit)) con::ok("Opened app for: " + hit.name);
+                else con::ok("Opened folder for: " + hit.name);
+            } else {
+                con::warn("Could not auto-open evidence for: " + hit.name);
+            }
+        }
+        con::info("Opened " + std::to_string(opened) + "/" + std::to_string(total) + " evidence location(s).");
+    }
     con::resultSummary(total == 0, total, "macro software trace(s)");
     waitEnter();
 }
