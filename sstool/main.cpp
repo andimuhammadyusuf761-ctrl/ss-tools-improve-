@@ -527,7 +527,7 @@ std::vector<std::string_view> universalPatterns = {
 
 static void waitEnter() {
     con::dim("Press Enter to continue...");
-    std::cin.ignore(10000, '\n');
+    if (std::cin.rdbuf()->in_avail() > 0) std::cin.ignore(10000, '\n');
     std::cin.get();
 }
 
@@ -540,6 +540,10 @@ static int readInt() {
         return -1;
     }
     return v;
+}
+
+static void discardLine() {
+    std::cin.ignore(10000, '\n');
 }
 
 // =====================================================================
@@ -680,7 +684,7 @@ void runModsFolderScanMenu() {
     }
     con::prompt("Paste mods folder path (or press Enter for default):");
 
-    std::cin.ignore();
+    discardLine();
     std::string input;
     std::getline(std::cin, input);
 
@@ -761,9 +765,10 @@ void runJvmFlagsScan() {
     con::dim("(Queries WMI via PowerShell -- may take a moment)\n");
 
     bool anyFinding = false;
+    int findingCount = 0;
 
     for (const auto& p : procs) {
-        std::string exeNameA(p.exeName.begin(), p.exeName.end());
+        std::string exeNameA = jvmscan::wideToUtf8(p.exeName);
 
         con::subheader("PID " + std::to_string(p.pid) + "  (" + exeNameA + ")");
 
@@ -785,6 +790,7 @@ void runJvmFlagsScan() {
             con::ok("No suspicious JVM flags or unrecognized agents found.");
         } else {
             anyFinding = true;
+            findingCount += (int)findings.size();
             for (const auto& f : findings) {
                 if (f.severity == con::Color::Red)    con::bad(f.text);
                 else if (f.severity == con::Color::Yellow) con::warn(f.text);
@@ -793,7 +799,7 @@ void runJvmFlagsScan() {
         }
     }
 
-    con::resultSummary(!anyFinding, anyFinding ? 1 : 0, "suspicious JVM flags");
+    con::resultSummary(!anyFinding, findingCount, "suspicious JVM flag(s)");
     waitEnter();
 }
 
@@ -862,15 +868,8 @@ static void printBanner() {
     GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode);
     SetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 
-    con::set(con::Color::Cyan);
     std::cout << "\n";
-    std::cout << "  ============================================================\n";
-    std::cout << "  |                                                          |\n";
-    std::cout << "  |            SS TOOL  --  by lvstrng  v1.3                |\n";
-    std::cout << "  |         Minecraft Screenshare / Cheat Detection          |\n";
-    std::cout << "  |                                                          |\n";
-    std::cout << "  ============================================================\n";
-    con::reset();
+    con::titleCard("SS TOOLS  v1.4", "Minecraft Screenshare / Cheat Detection");
     std::cout << "\n";
     con::dim("  Run as Administrator for full memory read access.");
     con::dim("  All scans are read-only -- nothing is modified on this PC.\n");
@@ -883,10 +882,7 @@ int main() {
     printBanner();
 
     while (true) {
-        con::divider('=', 60, con::Color::Cyan);
-        con::set(con::Color::Cyan);
-        std::cout << "  MAIN MENU\n";
-        con::divider('=', 60, con::Color::Cyan);
+        con::menuHeader("MAIN MENU  --  choose a step-by-step scan");
         std::cout << "\n";
 
         struct MenuItem { const char* label; const char* desc; };
@@ -900,8 +896,8 @@ int main() {
 
         for (int i = 0; i < 5; i++) {
             con::set(con::Color::Cyan);
-            std::cout << "    [" << (i + 1) << "] ";
-            con::set(con::Color::White);
+            std::cout << "    " << (i + 1) << ". ";
+            con::set(i == 4 ? con::Color::Yellow : con::Color::White);
             std::cout << items[i].label;
             if (items[i].desc[0]) {
                 con::set(con::Color::Gray);
@@ -911,7 +907,7 @@ int main() {
             con::reset();
         }
 
-        con::prompt("Choose an option (1-5):");
+        con::prompt("Choose an option (1-5), then follow the guided steps:");
         int choice = readInt();
         std::cout << "\n";
 
@@ -926,9 +922,9 @@ int main() {
     }
 
     std::cout << "\n";
-    con::divider('=', 60, con::Color::Gray);
+    con::divider('=', con::UiWidth, con::Color::Gray);
     con::dim("  Exiting SS Tool. Goodbye.");
-    con::divider('=', 60, con::Color::Gray);
+    con::divider('=', con::UiWidth, con::Color::Gray);
     std::cout << "\n";
 
     return 0;
