@@ -1,306 +1,220 @@
-#include <Windows.h>
-#include <iostream>
-#include <vector>
-#include <string>
-#include <string_view>
-#include <tlhelp32.h>
 #include "PatternScan.h"
+#include "ProcessScan.h"
+#include "ModsScan.h"
+#include "JvmScan.h"
+#include "JavaProcessResolve.h"
+#include "Console.h"
+#include <filesystem>
+#include <cstdlib>
 
-// Updated strings for Minecraft 1.8.9 - 1.21.11
+// =====================================================================
+// Pattern lists
+//
+// Rule for adding new strings (per README): a string must NOT be able to
+// occur in vanilla Minecraft. Fully-qualified Java package/class names
+// are the safest signal (0 false positive risk) because vanilla will
+// never contain them. Long, specific description/tooltip strings are the
+// next safest. Short generic words (e.g. "Speed", "Reach", "Sprint") are
+// intentionally left out even though they appear in the client source,
+// because those words alone can occur in unrelated vanilla/menu context
+// and would cause false flags.
+// =====================================================================
+
 std::vector<std::string_view> novaPatterns = {
     "aHR0cDovL2FwaS5ub3ZhY2xpZW50LmxvbC93ZWJob29rLnR4dA==",
     "novaclient",
     "addFri",
     "antiAttack",
-    "/assets/font/font.ttf",
+    "/assets/font/font.ttf", //also works for argon
     "Lithium is not initialized! Skipping event: ",
     "Error in hash"
 };
 
-std::vector<std::string_view> universalPatterns = {
-    // Original
-    "Auto Crystal", "Self Destruct", "Auto Anchor", "Auto Loot Yeeter",
-    "CwCrystal.class", "ADH.class", "ModuleManager.class",
-
-    // Expanded common cheats (1.8.9 - 1.21+)
-    "AimAssist", "AutoCrystal", "CrystalAura", "KillAura", "TriggerBot",
-    "SilentAim", "Reach", "ReachHack", "ShieldBreaker", "ShieldDisabler",
-    "AutoTotem", "AutoAnchor", "DoubleAnchor", "SafeAnchor", "AirAnchor",
-    "AutoBed", "BedAura", "FastPlace", "AutoClicker", "AutoEat", "AutoMine",
-    "FlyHack", "SpeedHack", "BHop", "NoKnockback", "AntiKB", "Freecam",
-    "XRayHack", "PlayerESP", "BlockESP", "AutoGap", "AutoPearl",
-    "GrimBypass", "VulcanBypass", "PacketMine", "FakeLag",
-
-    // Macro-specific (198M, Zenith, etc.)
-    "198m", "198macros", "198M", "198 Macro", "anchor macro", "crystal macro",
-    "Zenith", "ZenithMacros", "zenith macro", "double anchor", "safe anchor place",
-    "PLACE CHARGE EXPLODE", "mace macro", "sword macro", "cart macro",
-    "AutoCrit", "StunSlam", "PopSwitch", "MaceSwap", "HoverTotem",
-
-    // More generic / obfuscated hints
-    "AutoHitCrystal", "AnchorTweaks", "NoBounce", "FastXP", "AutoBridge",
-    "WTap", "FakeInv", "PacketFly", "AxeSpam", "BowAimbot",
-
-    // Argon Client .class files
-    "BooleanSetting.class", "KeybindSetting.class", "MinMaxSetting.class", "ModeSetting.class",
-    "NumberSetting.class", "Setting.class", "StringSetting.class",
-    "AnimationUtils.class", "BlockUtils.class", "ColorUtils.class", "CrystalUtils.class",
-    "DamageUtils.class", "EncryptedString.class", "FakeInvScreen.class", "InventoryUtils.class",
-    "KeyUtils.class", "MathUtils.class", "MouseSimulation.class", "ProjectionUtils.class",
-    "RenderUtils.class", "RotationUtils.class", "TextRenderer.class",
-
-    // Process Hacker detectable strings (advanced/generic)
-    "memory region", "VirtualProtect", "NtReadVirtualMemory", "NtWriteVirtualMemory",
-    "CreateRemoteThread", "LoadLibraryA", "GetProcAddress", "RtlMoveMemory",
-    "hooked", "detour", "jmp ", "ret ", "shellcode", "inject", "DLL_PROCESS_ATTACH",
-    "Minecraft.jar", "client.jar", "forge.jar", "fabric.jar", "optifine.jar",
-    "-javaagent", "-noverify", "-Xbootclasspath/a", "-Xmx", "-Xms",
-    "obfuscated", "encrypted", "hidden", "bypass", "anticheat", "detection",
-    "ghost client", "external client", "internal client", "cheat engine",
-    "AutoClicker.exe", "Macro.exe", "Killaura.exe", "Aimbot.exe",
-    "ProcessHacker.exe", "x64dbg.exe", "ollydbg.exe", "ida.exe",
-    "cheat-client", "hacked-client", "utility-mod", "module-manager",
-    "eventbus", "onEnable", "onDisable", "onUpdate", "onPacket",
-    "render2D", "render3D", "drawRect", "drawString", "drawCircle",
-    "GL11", "GL_BLEND", "GL_DEPTH_TEST", "GL_ALPHA_TEST",
-    "sendPacket", "receivePacket", "playerMove", "attackEntity",
-    "getMouseOver", "getLookVec", "getEyeHeight", "isSneaking", "isSprinting",
-    "setSprinting", "setSneaking", "setMotionX", "setMotionY", "setMotionZ",
-    "onWorldLoad", "onPlayerJoin", "onPlayerLeave", "onChat",
-    "keybind", "toggle", "bind", "config", "settings", "gui", "menu",
-    "module", "category", "arraylist", "hud", "watermark", "font",
-    "theme", "profile", "account", "friend", "enemy", "target",
-    "hitbox", "boundingbox", "renderbox", "tracer", "esp", "chams",
-    "wallhack", "fullbright", "nofog", "nosky", "norender", "nooverlay",
-    "itemesp", "chestesp", "storageesp", "tracers", "waypoints",
-    "timer", "tps", "ping", "fps", "cps", "bypassed", "patched",
-    "exploit", "vulnerability", "crash", "kick", "ban", "debug", "log",
-    "console", "command", "prefix", "binds", "keybinds", "aliases",
-    "script", "lua", "javascript", "python", "autoit", "ahk",
-    "dll injection", "code caves", "IAT hook", "EAT hook", "inline hook",
-    "VEH hook", "APC injection", "thread hijacking", "manual map",
-    "shellcode injection", "remote thread", "process hollowing",
-    "PEB walk", "TEB walk", "SSDT hook", "shadow hook", "kernel hook",
-    "driver", "rootkit", "hypervisor", "VMProtect", "Themida", "Obsidium",
-    "Packer", "Crypter", "Protector", "Virtualizer", "Anti-VM", "Anti-Debug",
-    "Anti-Dump", "Anti-Tamper", "checksum", "hash", "CRC32", "MD5", "SHA1",
-    "AES", "XOR", "RC4", "Base64", "obf", "enc", "dec", "str_decrypt",
-    "string_encrypt", "string_obfuscate", "string_decode", "string_encode",
-    "byte array", "byte code", "bytecode manipulation", "class transformer",
-    "mixin", "mixins", "mixin.json", "tweakclass", "coremod", "eventhandler",
-    "eventlistener", "eventpriority", "subscribeevent", "registerevent",
-    "postevent", "cancellable", "eventcancel", "eventbus", "eventmanager",
-    "ReflectionHelper", "Unsafe", "sun.misc.Unsafe", "java.lang.instrument",
-    "Instrumentation", "Agent", "attach", "VirtualMachine", "tools.jar",
-    "JVMTI", "JNI", "native method", "native code", "System.loadLibrary",
-    "System.load", "Runtime.getRuntime().exec", "ProcessBuilder",
-    "File.createTempFile", "File.deleteOnExit", "URLClassLoader",
-    "NetworkManager", "PacketEvent", "SendPacketEvent", "ReceivePacketEvent",
-    "PlayerMoveEvent", "AttackEntityEvent", "UseItemEvent", "BlockChangeEvent",
-    "WorldEvent", "RenderEvent", "TickEvent", "ClientTickEvent", "ServerTickEvent",
-    "PlayerTickEvent", "LivingUpdateEvent", "RenderLivingEvent", "RenderWorldLastEvent",
-    "RenderGameOverlayEvent", "GuiScreenEvent", "MouseEvent", "KeyboardEvent",
-    "onKeyInput", "onMouseInput", "onGuiOpen", "onRenderTick", "onClientDisconnect",
-    "onClientConnect", "onPlayerDeath", "onAttack", "onUpdateWalkingPlayer",
-    "sendChatMessage", "displayChatMessage", "addChatMessage", "printChatMessage",
-    "getMinecraft().player", "getMinecraft().world", "getMinecraft().currentScreen",
-    "getMinecraft().getConnection()", "getMinecraft().getRenderManager()",
-    "getMinecraft().getTextureManager()", "getMinecraft().fontRenderer",
-    "getMinecraft().gameSettings", "getMinecraft().isSingleplayer()",
-    "getMinecraft().isFullScreen()", "getMinecraft().getDebugFPS()",
-    "getMinecraft().getIntegratedServer()", "getMinecraft().getNetHandler()",
-    "getMinecraft().getRenderViewEntity()", "getMinecraft().getRenderPartialTicks()",
-    "getMinecraft().getRenderPosX()", "getMinecraft().getRenderPosY()",
-    "getMinecraft().getRenderPosZ()", "getMinecraft().getRenderViewEntity().posX",
-    "getMinecraft().getRenderViewEntity().posY", "getMinecraft().getRenderViewEntity().posZ",
-    "getMinecraft().getRenderViewEntity().rotationYaw", "getMinecraft().getRenderViewEntity().rotationPitch",
-    "getMinecraft().getRenderViewEntity().prevRotationYaw", "getMinecraft().getRenderViewEntity().prevRotationPitch",
-    "getMinecraft().getRenderViewEntity().lastTickPosX", "getMinecraft().getRenderViewEntity().lastTickPosY",
-    "getMinecraft().getRenderViewEntity().lastTickPosZ", "getMinecraft().getRenderViewEntity().getDistanceSq",
-    "getMinecraft().getRenderViewEntity().getDistance", "getMinecraft().getRenderViewEntity().getEyeHeight",
-    "getMinecraft().getRenderViewEntity().getHealth()", "getMinecraft().getRenderViewEntity().getMaxHealth()",
-    "getMinecraft().getRenderViewEntity().isDead", "getMinecraft().getRenderViewEntity().isAlive",
-    "getMinecraft().getRenderViewEntity().isInvisible", "getMinecraft().getRenderViewEntity().isSneaking",
-    "getMinecraft().getRenderViewEntity().isSprinting", "getMinecraft().getRenderViewEntity().isCollidedHorizontally",
-    "getMinecraft().getRenderViewEntity().isCollidedVertically", "getMinecraft().getRenderViewEntity().onGround",
-    "getMinecraft().getRenderViewEntity().fallDistance", "getMinecraft().getRenderViewEntity().motionX",
-    "getMinecraft().getRenderViewEntity().motionY", "getMinecraft().getRenderViewEntity().motionZ",
-    "getMinecraft().getRenderViewEntity().rotationYawHead", "getMinecraft().getRenderViewEntity().prevRotationYawHead",
-    "getMinecraft().getRenderViewEntity().renderYawOffset", "getMinecraft().getRenderViewEntity().prevRenderYawOffset",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand()",
-    "getMinecraft().getRenderViewEntity().getArmorInventoryList()", "getMinecraft().getRenderViewEntity().getAbsorptionAmount()",
-    "getMinecraft().getRenderViewEntity().getFoodStats()", "getMinecraft().getRenderViewEntity().getUniqueID()",
-    "getMinecraft().getRenderViewEntity().getName()", "getMinecraft().getRenderViewEntity().getDisplayName()",
-    "getMinecraft().getRenderViewEntity().getCustomNameTag()", "getMinecraft().getRenderViewEntity().isCustomNameVisible()",
-    "getMinecraft().getRenderViewEntity().getAlwaysRenderNameTag()", "getMinecraft().getRenderViewEntity().getHealth()",
-    "getMinecraft().getRenderViewEntity().getMaxHealth()", "getMinecraft().getRenderViewEntity().getAbsorptionAmount()",
-    "getMinecraft().getRenderViewEntity().getFoodStats().getFoodLevel()", "getMinecraft().getRenderViewEntity().getFoodStats().getSaturationLevel()",
-    "getMinecraft().getRenderViewEntity().getFoodStats().getExhaustion()", "getMinecraft().getRenderViewEntity().getFoodStats().getFoodTimer()",
-    "getMinecraft().getRenderViewEntity().getFoodStats().getFoodLevel()", "getMinecraft().getRenderViewEntity().getFoodStats().getSaturationLevel()",
-    "getMinecraft().getRenderViewEntity().getFoodStats().getExhaustion()", "getMinecraft().getRenderViewEntity().getFoodStats().getFoodTimer()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().getItem()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().getItem()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().getDisplayName()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().getDisplayName()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().getUnlocalizedName()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().getUnlocalizedName()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().getItemDamage()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().getItemDamage()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().getMaxDamage()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().getMaxDamage()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().isStackable()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().isStackable()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().isEmpty()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().isEmpty()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().getCount()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().getCount()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().getMaxStackSize()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().getMaxStackSize()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().hasEffect()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().hasEffect()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().isEnchanted()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().isEnchanted()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().getEnchantmentTagList()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().getEnchantmentTagList()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().getDisplayName()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().getDisplayName()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().getTooltip()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().getTooltip()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().getRarity()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().getRarity()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().getRegistryName()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().getRegistryName()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().getTranslationKey()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().getTranslationKey()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().getCreativeTab()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().getCreativeTab()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().isDamageable()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().isDamageable()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().isRepairable()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().isRepairable()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().isPotion()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().isPotion()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().isFood()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().isFood()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().isShield()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().isShield()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().isBow()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().isBow()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().isCrossbow()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().isCrossbow()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().isTrident()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().isTrident()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().isBlock()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().isBlock()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().isArmor()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().isArmor()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().isTool()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().isTool()",
-    "getMinecraft().getRenderViewEntity().getHeldItemMainhand().isWeapon()", "getMinecraft().getRenderViewEntity().getHeldItemOffhand().isWeapon()"
+// --- CrystalPvPHelper (net.crystalpvphelper) ---
+std::vector<std::string_view> crystalPatterns = {
+    "net.crystalpvphelper",
+    "crystalpvphelper",
+    "net.crystalpvphelper.module.ModuleManager",
+    "net.crystalpvphelper.module.modules.combat.AnchorMacro",
+    "net.crystalpvphelper.module.modules.combat.TriggerBot",
+    "net.crystalpvphelper.module.modules.combat.AutoMace",
+    "net.crystalpvphelper.module.modules.combat.WTap",
+    "net.crystalpvphelper.module.modules.combat.Hitboxes",
+    "net.crystalpvphelper.module.modules.combat.AimAssist",
+    "net.crystalpvphelper.module.modules.combat.AutoInventoryTotem",
+    "net.crystalpvphelper.module.modules.combat.AutoStun",
+    "--- CrystalPvPHelper Commands ---",
+    ".bind <module> <key> - Bind a module to a key",
+    "Automated anchor explosion macro for Crystal PvP",
+    "Automated Mace combat with density, breach, and crit mechanics",
+    "Automatically breaks shields with an axe",
+    "Expands player hitboxes and applies fake rotations",
+    "Automatically attacks entities in crosshair",
+    "Automatically resets sprint on hit for extra knockback"
 };
 
-std::vector<std::string_view> macroPatterns = {
-    // 198M Macros
-    "198M", "198m", "198Macros", "198m_back", "198m.com", "198M_Macro",
-    // Zenith Macros
-    "Zenith", "ZenithMacros", "Zenith Macros", "PLACECHARGEEXPLODE", "PLACECHARGEFLICKGLOW", "PLACECHARGEPOP+PLACEEXPLODE",
-    "PLACECHARGEPEARL", "zenithmacros.store", "Zenith.exe",
-    // General Macro/AHK
-    "AutoHotkey", "AHK", "Macro", "Anchor Macro", "Aim Assist", "Auto Clicker", "Fast Crystal", "Double Anchor"
+// --- Noqwd / Skate client (hack.skate.client), includes AutoCrystal ---
+std::vector<std::string_view> skatePatterns = {
+    "hack.skate.client",
+    "noqwdclient",
+    "hack.skate.client.features.impl.combat.AnchorMacro",
+    "hack.skate.client.features.impl.combat.AutoCrystal",
+    "hack.skate.client.features.impl.combat.AutoCrystalV2",
+    "hack.skate.client.features.impl.combat.AutoDoubleHand",
+    "hack.skate.client.features.impl.combat.TriggerBot",
+    "hack.skate.client.features.impl.combat.CrystalOptimizer",
+    "hack.skate.client.features.impl.combat.BreachSwap",
+    "hack.skate.client.features.impl.combat.AimAssistV2",
+    "hack.skate.client.features.impl.client.SelfDestruct",
+    "hack.skate.client.features.impl.client.ClickGUI",
+    "Advanced smooth aim with movement prediction and AC bypass",
+    "Bypasses stray's Anti-TriggerBot",
+    "Stray Bypass"
+};
+
+// --- Argon (dev.lvstrng.argon) ---
+// Argon encrypts most of its user-facing display strings at runtime
+// (see dev.lvstrng.argon.utils.EncryptedString), so display names like
+// "Anchor Macro" will usually NOT be readable in plaintext memory. The
+// package/class names below are the reliable signal for this client.
+// It also disguises its Fabric mod id as "immediatelyfast" to mimic the
+// legitimate ImmediatelyFast performance mod, so the mod id alone is not
+// a safe pattern to scan for.
+std::vector<std::string_view> argonPatterns = {
+    "dev.lvstrng.argon",
+    "dev.lvstrng.argon.mixin",
+    "dev.lvstrng.argon.module.ModuleManager",
+    "dev.lvstrng.argon.module.modules.combat.AnchorMacro",
+    "dev.lvstrng.argon.module.modules.combat.TriggerBotV2",
+    "dev.lvstrng.argon.module.modules.combat.ShieldDisabler",
+    "dev.lvstrng.argon.module.modules.combat.MaceStun",
+    "dev.lvstrng.argon.module.modules.combat.AutoHitCrystal",
+    "dev.lvstrng.argon.module.modules.combat.HoverTotem",
+    "dev.lvstrng.argon.module.modules.client.SelfDestruct",
+    "dev.lvstrng.argon.utils.EncryptedString"
+};
+
+// --- Shared across multiple clients (class-file signatures) ---
+std::vector<std::string_view> universalPatterns = {
+    "Auto Crystal",
+    "Self Destruct",
+    "Auto Anchor",
+    "Auto Loot Yeeter",
+    "CwCrystal.class",
+    "ADH.class",
+    "ModuleManager.class",
+    "AnchorMacro.class",
+    "TriggerBot.class",
+    "AutoDoubleHand.class",
+    "AutoInventoryTotem.class",
+    "AutoCrystal.class",
+    "SelfDestruct.class",
+    "ClickGUI.class"
 };
 
 std::vector<std::string> clientList = {
     "Nova Client",
-    "Universal (Wurst, Meteor, LiquidBounce, etc.)",
-    "Macros (198M, Zenith, etc.)",
-    "Scan All"
+    "CrystalPvPHelper",
+    "Noqwd / Skate Client (incl. AutoCrystal)",
+    "Argon",
+    "All (Might not work for all clients)"
 };
 
-DWORD FindProcessId(const std::string& processName) {
-    PROCESSENTRY32 processInfo;
-    processInfo.dwSize = sizeof(processInfo);
+void runMemoryScan() {
+    HANDLE handle = resolveJavawTarget();
+    if (!handle) return; // resolver already printed why
 
-    HANDLE processesSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, NULL);
-    if (processesSnapshot == INVALID_HANDLE_VALUE)
-        return 0;
+    std::cout << "Select Client To Scan For: \n";
+    for (size_t i = 0; i < clientList.size(); i++)
+        std::cout << (i + 1) << ". " << clientList.at(i) << "\n";
 
-    Process32First(processesSnapshot, &processInfo);
-    if (!processName.compare(processInfo.szExeFile)) {
-        CloseHandle(processesSnapshot);
-        return processInfo.th32ProcessID;
-    }
+    int option;
+    std::cin >> option;
 
-    while (Process32Next(processesSnapshot, &processInfo)) {
-        if (!processName.compare(processInfo.szExeFile)) {
-            CloseHandle(processesSnapshot);
-            return processInfo.th32ProcessID;
+    std::vector<std::string_view> scannable;
+    switch (option) {
+        case 1: scannable = novaPatterns; break;
+        case 2: scannable = crystalPatterns; break;
+        case 3: scannable = skatePatterns; break;
+        case 4: scannable = argonPatterns; break;
+        case 5: {
+            scannable.insert(scannable.end(), novaPatterns.begin(), novaPatterns.end());
+            scannable.insert(scannable.end(), crystalPatterns.begin(), crystalPatterns.end());
+            scannable.insert(scannable.end(), skatePatterns.begin(), skatePatterns.end());
+            scannable.insert(scannable.end(), argonPatterns.begin(), argonPatterns.end());
+            scannable.insert(scannable.end(), universalPatterns.begin(), universalPatterns.end());
+            break;
         }
+        default:
+            std::cout << "Invalid option.\n";
+            CloseHandle(handle);
+            return;
     }
 
-    CloseHandle(processesSnapshot);
-    return 0;
+    auto results = pattern_scan(handle, scannable);
+
+    size_t utf16Hits = 0;
+    for (const auto& r : results) if (r.wasUtf16) utf16Hits++;
+
+    std::cout << "Found " << std::dec << results.size() << " traces";
+    if (utf16Hits > 0)
+        std::cout << " (" << utf16Hits << " only visible as UTF-16 Java strings)";
+    std::cout << "\n";
+    CloseHandle(handle);
 }
 
-void scanProcesses() {
-    std::cout << "\n--- External Process Scan ---\n";
-    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (hSnapshot == INVALID_HANDLE_VALUE) return;
+void runModsFolderScanMenu() {
+    wchar_t* appData = _wgetenv(L"USERPROFILE");
+    std::filesystem::path defaultPath = appData
+        ? std::filesystem::path(appData) / L"AppData" / L"Roaming" / L".minecraft" / L"mods"
+        : std::filesystem::path();
 
-    PROCESSENTRY32 pe32;
-    pe32.dwSize = sizeof(PROCESSENTRY32);
+    std::cout << "Enter path to the mods folder (press Enter for default";
+    if (!defaultPath.empty()) std::cout << ": " << defaultPath.string();
+    std::cout << "): ";
+    std::cin.ignore();
+    std::string input;
+    std::getline(std::cin, input);
 
-    if (Process32First(hSnapshot, &pe32)) {
-        do {
-            std::string procName = pe32.szExeFile;
-            bool flagged = false;
-            
-            if (procName.find("Zenith") != std::string::npos || 
-                procName.find("198M") != std::string::npos ||
-                procName.find("AutoHotkey") != std::string::npos ||
-                procName.find("Macro") != std::string::npos ||
-                procName.find("Wurst") != std::string::npos ||
-                procName.find("Meteor") != std::string::npos) {
-                flagged = true;
-            }
-
-            if (flagged) {
-                std::cout << "[!] Flagged Process Found: " << procName << " (PID: " << pe32.th32ProcessID << ")\n";
-            }
-        } while (Process32Next(hSnapshot, &pe32));
+    std::filesystem::path modsPath = input.empty() ? defaultPath : std::filesystem::path(input);
+    if (modsPath.empty()) {
+        std::cout << "No path given and no default could be determined.\n";
+        return;
     }
-    CloseHandle(hSnapshot);
-    std::cout << "--- Process Scan Complete ---\n\n";
+
+    modscan::runModsFolderScan(modsPath.wstring());
 }
 
 int main() {
-    std::cout << "========================================\n";
-    std::cout << "   Improved SS Tool | 1.8.9 - 1.21.11   \n";
-    std::cout << "      Updated with 198M & Zenith        \n";
-    std::cout << "========================================\n";
+    std::cout << "Screenshare tool | Made by lvstrng | v1.2\n";
 
-    scanProcesses();
+    while (true) {
+        std::cout << "\nWhat do you want to do?\n"
+                   << "1. Scan a Minecraft process for cheat client traces (live memory)\n"
+                   << "2. Scan a mods folder for cheat client traces (jar analysis)\n"
+                   << "3. Scan for suspicious JVM flags / injected java agents\n"
+                   << "4. Scan this PC for macro software (198M Macros / Zenith Macros, running or installed)\n"
+                   << "5. Exit\n";
 
-    DWORD pid = FindProcessId("javaw.exe");
-    if (pid == 0) {
-        std::cout << "\n[!] javaw.exe process not found. Please ensure Minecraft is running.\n";
-        std::cout << "\nPress Enter to exit...";
-        std::cin.ignore();
-        std::cin.get();
-        return 1;
-    }
+        int choice;
+        std::cin >> choice;
 
-    std::cout << "[*] Found javaw.exe with PID: " << pid << "\n";
-
-    HANDLE handle = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
-
-    if (!handle) {
-        std::cout << "\n[!] Invalid Process or Access Denied. Run as Administrator.\n";
-        std::cout << "\nPress Enter to exit...";
-        std::cin.ignore();
-        std::cin.get();
-        return 1;
-    } else {
-        std::cout << "\nSelect Scan Mode: \n";
-        for (int i = 0; i < clientList.size(); i++)
-            std::cout << (i + 1) << ". " << clientList.at(i) << "\n";
-
-        int option;
-        std::cin >> option;
-
-        std::vector<std::string_view> scannable;
-        switch (option) {
-            case 1: scannable = novaPatterns; break;
-            case 2: scannable = universalPatterns; break;
-            case 3: scannable = macroPatterns; break;
-            case 4: 
-                scannable.insert(scannable.end(), novaPatterns.begin(), novaPatterns.end());
-                scannable.insert(scannable.end(), universalPatterns.begin(), universalPatterns.end());
-                scannable.insert(scannable.end(), macroPatterns.begin(), macroPatterns.end());
-                break;
-            default: scannable = universalPatterns; break;
+        if (choice == 1) {
+            runMemoryScan();
+        } else if (choice == 2) {
+            runModsFolderScanMenu();
+        } else if (choice == 3) {
+            jvmscan::runJvmScan();
+        } else if (choice == 4) {
+            runMacroScan();
+        } else {
+            break;
         }
-
-        std::cout << "\n[*] Scanning memory for " << scannable.size() << " patterns...\n";
-        auto results = pattern_scan(handle, scannable);
-
-        std::cout << "\n[+] Scan Complete. Found " << std::dec << results.size() << " traces.\n";
     }
 
-    std::cout << "\nPress Enter to exit...";
+    std::cout << "Press any key to exit...\n";
     std::cin.ignore();
     std::cin.get();
 
-    CloseHandle(handle);
     return 0;
 }

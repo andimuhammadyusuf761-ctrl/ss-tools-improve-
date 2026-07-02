@@ -133,6 +133,12 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="PatternScan.h" />
+    <ClInclude Include="ProcessScan.h" />
+    <ClInclude Include="ModsScan.h" />
+    <ClInclude Include="JvmScan.h" />
+    <ClInclude Include="JarUtil.h" />
+    <ClInclude Include="CheatStrings.h" />
+    <ClInclude Include="Console.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

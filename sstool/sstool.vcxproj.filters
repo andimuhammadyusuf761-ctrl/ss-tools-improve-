@@ -23,5 +23,23 @@
     <ClInclude Include="PatternScan.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="ProcessScan.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ModsScan.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="JvmScan.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="JarUtil.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="CheatStrings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Console.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
