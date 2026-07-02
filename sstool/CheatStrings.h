@@ -1,4 +1,6 @@
 #pragma once
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
 // =====================================================================
 // Curated cheat/macro identifier database for jar-level static analysis
 // (used by ModsScan.h). Ported and deduplicated from the MeowModAnalyzer

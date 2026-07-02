@@ -1,4 +1,6 @@
 #pragma once
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <TlHelp32.h>
 #include <Psapi.h>
@@ -6,6 +8,7 @@
 #include <vector>
 #include <iostream>
 #include <algorithm>
+#include "Console.h"
 
 // Finds every running javaw.exe / java.exe process, and lets the operator
 // pick one instead of typing a raw PID blind. Replaces the plain
@@ -104,60 +107,65 @@ static bool verifyIsJavaProcess(HANDLE hProcess) {
 static HANDLE resolveJavawTarget() {
     auto candidates = findJavaProcesses();
 
-    if (candidates.empty()) {
-        std::wcout << L"No javaw.exe / java.exe processes found running.\n";
-        std::wcout << L"Enter PID manually (0 to cancel): ";
-        DWORD pid;
-        std::cin >> pid;
-        if (pid == 0) return nullptr;
-
-        HANDLE h = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
-        if (!h) {
-            std::wcout << L"Invalid Process.\n";
-            return nullptr;
-        }
-        if (!verifyIsJavaProcess(h)) {
-            std::wcout << L"PID " << pid << L" exists but is not javaw.exe/java.exe. Refusing to scan.\n";
-            CloseHandle(h);
-            return nullptr;
-        }
-        return h;
-    }
-
-    std::wcout << L"\nJava processes found:\n";
-    for (size_t i = 0; i < candidates.size(); i++) {
-        std::wcout << L"  " << (i + 1) << L". PID " << candidates[i].pid
-                    << L"  [" << candidates[i].exeName << L"]";
-        if (!candidates[i].windowTitle.empty())
-            std::wcout << L"  \"" << candidates[i].windowTitle << L"\"";
-        std::wcout << L"\n";
-    }
-    std::wcout << L"  " << (candidates.size() + 1) << L". Enter a PID manually instead\n";
-    std::wcout << L"Select: ";
-
-    size_t choice;
-    std::cin >> choice;
-
     DWORD pid = 0;
-    if (choice >= 1 && choice <= candidates.size()) {
-        pid = candidates[choice - 1].pid;
-    } else if (choice == candidates.size() + 1) {
-        std::wcout << L"Minecraft PID: ";
-        std::cin >> pid;
+
+    if (candidates.empty()) {
+        con::warn("No javaw.exe / java.exe processes found running.");
+        con::prompt("Enter PID manually (0 to cancel):");
+        if (!(std::cin >> pid) || pid == 0) return nullptr;
     } else {
-        std::wcout << L"Invalid selection.\n";
-        return nullptr;
+        // Print process table
+        con::set(con::Color::Cyan);
+        std::cout << "\n  #   PID       EXE           WINDOW TITLE\n";
+        con::divider('-', 60, con::Color::DarkGray);
+
+        for (size_t i = 0; i < candidates.size(); i++) {
+            std::string exeA(candidates[i].exeName.begin(), candidates[i].exeName.end());
+            std::string titleA(candidates[i].windowTitle.begin(), candidates[i].windowTitle.end());
+            con::set(con::Color::Cyan);
+            std::cout << "  [" << (i + 1) << "] ";
+            con::set(con::Color::White);
+            std::cout << candidates[i].pid;
+            con::set(con::Color::Gray);
+            std::cout << "  " << exeA;
+            if (!titleA.empty()) std::cout << "  \"" << titleA << "\"";
+            std::cout << "\n";
+            con::reset();
+        }
+
+        // Manual entry option
+        con::set(con::Color::Cyan);
+        std::cout << "  [" << (candidates.size() + 1) << "] ";
+        con::set(con::Color::Gray);
+        std::cout << "Enter a PID manually\n";
+        con::reset();
+
+        con::prompt("Select process (1-" + std::to_string(candidates.size() + 1) + "):");
+        size_t choice = 0;
+        if (!(std::cin >> choice)) return nullptr;
+
+        if (choice >= 1 && choice <= candidates.size()) {
+            pid = candidates[choice - 1].pid;
+        } else if (choice == candidates.size() + 1) {
+            con::prompt("Enter PID:");
+            if (!(std::cin >> pid)) return nullptr;
+        } else {
+            con::bad("Invalid selection.");
+            return nullptr;
+        }
     }
 
+    con::info("Opening process " + std::to_string(pid) + "...");
     HANDLE h = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
     if (!h) {
-        std::wcout << L"Invalid Process.\n";
+        con::bad("OpenProcess failed -- try running as Administrator.");
         return nullptr;
     }
     if (!verifyIsJavaProcess(h)) {
-        std::wcout << L"PID " << pid << L" exists but is not javaw.exe/java.exe. Refusing to scan.\n";
+        con::bad("PID " + std::to_string(pid) + " is not javaw.exe/java.exe. Refusing to scan.");
         CloseHandle(h);
         return nullptr;
     }
+    con::ok("Attached to PID " + std::to_string(pid) + ".");
     return h;
 }

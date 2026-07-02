@@ -1,4 +1,6 @@
 #pragma once
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <string>
 #include <vector>
@@ -440,27 +442,44 @@ namespace modscan {
     }
 
     inline void printReport(const JarReport& r) {
-        if (r.findings.empty() && !r.downloadSource) return; // clean jar, nothing to print
+        if (r.findings.empty() && !r.downloadSource) return;
 
-        con::header(r.jarName);
-        if (r.downloadSource) {
-            con::line("Downloaded via: " + *r.downloadSource, con::Color::Gray);
-        }
+        // Count severity for the header label
+        int dangers  = 0, warnings = 0;
         for (const auto& f : r.findings) {
-            con::Color c = f.severity == Severity::Danger ? con::Color::Red
-                          : f.severity == Severity::Warning ? con::Color::Yellow
-                          : con::Color::Gray;
-            con::line("[!] " + f.text, c);
+            if (f.severity == Severity::Danger)  dangers++;
+            if (f.severity == Severity::Warning) warnings++;
         }
+
+        // Header: jar name + severity badge
+        std::cout << "\n";
+        con::divider('-', 60, con::Color::DarkGray);
+        con::set(dangers > 0 ? con::Color::Red : con::Color::Yellow);
+        std::cout << "  JAR: " << r.jarName;
+        con::set(con::Color::Gray);
+        std::cout << "  (" << dangers << " danger, " << warnings << " warning)\n";
+        con::divider('-', 60, con::Color::DarkGray);
+        con::reset();
+
+        if (r.downloadSource) {
+            con::dim("Downloaded via: " + *r.downloadSource);
+        }
+
+        for (const auto& f : r.findings) {
+            if      (f.severity == Severity::Danger)  con::bad(f.text);
+            else if (f.severity == Severity::Warning)  con::warn(f.text);
+            else                                       con::info(f.text);
+        }
+
         if (!r.matchedStrings.empty()) {
             std::string joined;
             int shown = 0;
             for (const auto& s : r.matchedStrings) {
-                if (shown >= 25) { joined += "..."; break; }
+                if (shown >= 25) { joined += " ..."; break; }
                 if (shown++) joined += ", ";
                 joined += s;
             }
-            con::line("    Matches: " + joined, con::Color::Gray);
+            con::dim("Matches: " + joined);
         }
     }
 
