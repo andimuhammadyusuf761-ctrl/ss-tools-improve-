@@ -134,7 +134,11 @@ namespace jvmscan {
 
         for (const auto& p : procs) {
             std::string cmdLine = getCommandLine(p.pid);
-            std::cout << "PID " << p.pid << " (" << std::string(p.exeName.begin(), p.exeName.end()) << "):\n";
+            // Safe wide-to-narrow for the exe name display
+            int exeLen = WideCharToMultiByte(CP_UTF8, 0, p.exeName.c_str(), -1, nullptr, 0, nullptr, nullptr);
+            std::string exeNameA(exeLen > 0 ? exeLen - 1 : 0, '\0');
+            if (exeLen > 0) WideCharToMultiByte(CP_UTF8, 0, p.exeName.c_str(), -1, exeNameA.data(), exeLen, nullptr, nullptr);
+            std::cout << "PID " << p.pid << " (" << exeNameA << "):\n";
 
             if (cmdLine.empty()) {
                 con::line("  Couldn't read command line (access denied, or PowerShell/WMI unavailable).", con::Color::Gray);

@@ -234,10 +234,13 @@ void runModsFolderScanMenu() {
     // --- Step 1: Path ---
     con::step(1, 2, "Enter Mods Folder Path");
 
-    wchar_t* userProfile = _wgetenv(L"USERPROFILE");
-    std::filesystem::path defaultPath = userProfile
-        ? std::filesystem::path(userProfile) / L"AppData" / L"Roaming" / L".minecraft" / L"mods"
+    wchar_t* userProfileRaw = nullptr;
+    size_t userProfileLen = 0;
+    _wdupenv_s(&userProfileRaw, &userProfileLen, L"USERPROFILE");
+    std::filesystem::path defaultPath = userProfileRaw
+        ? std::filesystem::path(userProfileRaw) / L"AppData" / L"Roaming" / L".minecraft" / L"mods"
         : std::filesystem::path();
+    free(userProfileRaw);
 
     con::dim("What this scan checks:");
     con::dim("  - Cheat/macro class names and package paths inside each .jar");

@@ -120,8 +120,15 @@ static HANDLE resolveJavawTarget() {
         con::divider('-', 60, con::Color::DarkGray);
 
         for (size_t i = 0; i < candidates.size(); i++) {
-            std::string exeA(candidates[i].exeName.begin(), candidates[i].exeName.end());
-            std::string titleA(candidates[i].windowTitle.begin(), candidates[i].windowTitle.end());
+            // Safe wide-to-narrow conversion
+            auto wToA = [](const std::wstring& w) -> std::string {
+                int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
+                std::string s(len > 0 ? len - 1 : 0, '\0');
+                if (len > 0) WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, s.data(), len, nullptr, nullptr);
+                return s;
+            };
+            std::string exeA   = wToA(candidates[i].exeName);
+            std::string titleA = wToA(candidates[i].windowTitle);
             con::set(con::Color::Cyan);
             std::cout << "  [" << (i + 1) << "] ";
             con::set(con::Color::White);
