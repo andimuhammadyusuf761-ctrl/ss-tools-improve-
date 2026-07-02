@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cctype>
 #include <cwctype>
+#include <sstream>
 
 #include "Console.h"
 
@@ -56,25 +57,54 @@ namespace jvmscan {
         return found;
     }
 
+    inline std::string trim(std::string value) {
+        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) value.pop_back();
+        size_t start = 0;
+        while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start]))) ++start;
+        return start == 0 ? value : value.substr(start);
+    }
+
+    inline std::string wideToUtf8(const std::wstring& value) {
+        if (value.empty()) return {};
+        int len = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
+        if (len <= 1) return {};
+        std::string out(static_cast<size_t>(len - 1), '\0');
+        WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, out.data(), len, nullptr, nullptr);
+        return out;
+    }
+
+    inline std::string shellQuotePowerShell(const std::string& value) {
+        std::string quoted = "'";
+        for (char ch : value) {
+            if (ch == '\'') quoted += "''";
+            else quoted += ch;
+        }
+        quoted += "'";
+        return quoted;
+    }
+
     // Retrieves a process's full command line via WMI (through
     // PowerShell). Returns an empty string if it couldn't be read
     // (access denied, PowerShell missing, etc.) -- callers should treat
     // that as "unknown" rather than "clean".
     inline std::string getCommandLine(DWORD pid) {
-        std::string cmd = "powershell -NoProfile -WindowStyle Hidden -Command "
-            "\"(Get-CimInstance Win32_Process -Filter 'ProcessId=" + std::to_string(pid) + "').CommandLine\"";
+        std::ostringstream ps;
+        ps << "$ErrorActionPreference='SilentlyContinue';"
+           << "$p=Get-CimInstance Win32_Process -Filter "
+           << shellQuotePowerShell("ProcessId=" + std::to_string(pid)) << ";"
+           << "if($null -ne $p -and $null -ne $p.CommandLine){[Console]::OutputEncoding=[Text.UTF8Encoding]::UTF8;$p.CommandLine}";
+
+        std::string cmd = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -Command \"" + ps.str() + "\"";
 
         FILE* pipe = _popen(cmd.c_str(), "r");
         if (!pipe) return {};
 
         std::string result;
-        char buf[512];
-        while (fgets(buf, sizeof(buf), pipe)) result += buf;
-        _pclose(pipe);
-
-        // trim trailing whitespace/newlines
-        while (!result.empty() && std::isspace((unsigned char)result.back())) result.pop_back();
-        return result;
+        char buf[1024];
+        while (fgets(buf, sizeof(buf), pipe) != nullptr) result += buf;
+        int rc = _pclose(pipe);
+        if (rc == -1) return trim(result);
+        return trim(result);
     }
 
     struct JvmFinding {
@@ -91,12 +121,12 @@ namespace jvmscan {
         };
 
         try {
-            std::regex agentRe(R"(-javaagent:([^\s"]+))");
+            std::regex agentRe(R"agent(-javaagent:(?:"([^"]+)"|([^\s"]+)))agent", std::regex_constants::icase);
             auto begin = std::sregex_iterator(cmdLine.begin(), cmdLine.end(), agentRe);
             for (auto it = begin; it != std::sregex_iterator(); ++it) {
-                std::string agentPath = (*it)[1].str();
+                std::string agentPath = (*it)[1].matched ? (*it)[1].str() : (*it)[2].str();
                 std::string lowerPath = agentPath;
-                std::transform(lowerPath.begin(), lowerPath.end(), lowerPath.begin(), ::tolower);
+                std::transform(lowerPath.begin(), lowerPath.end(), lowerPath.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
 
                 bool isLegit = std::any_of(legitAgentMarkers.begin(), legitAgentMarkers.end(),
                     [&](const std::string& m) { return lowerPath.find(m) != std::string::npos; });
@@ -114,8 +144,10 @@ namespace jvmscan {
             { "-agentlib:jdwp",     "JDWP debug agent -- remote debugging enabled" },
             { "-agentpath:",        "native agent loaded -- bypasses the Java sandbox" },
         };
+        std::string cmdLower = cmdLine;
+        std::transform(cmdLower.begin(), cmdLower.end(), cmdLower.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
         for (const auto& sf : suspiciousFlags) {
-            if (cmdLine.find(sf.flag) != std::string::npos) {
+            if (cmdLower.find(sf.flag) != std::string::npos) {
                 findings.push_back({ con::Color::Yellow, std::string("Suspicious JVM flag -- ") + sf.flag + " (" + sf.desc + ")" });
             }
         }
@@ -134,10 +166,7 @@ namespace jvmscan {
 
         for (const auto& p : procs) {
             std::string cmdLine = getCommandLine(p.pid);
-            // Safe wide-to-narrow for the exe name display
-            int exeLen = WideCharToMultiByte(CP_UTF8, 0, p.exeName.c_str(), -1, nullptr, 0, nullptr, nullptr);
-            std::string exeNameA(exeLen > 0 ? exeLen - 1 : 0, '\0');
-            if (exeLen > 0) WideCharToMultiByte(CP_UTF8, 0, p.exeName.c_str(), -1, exeNameA.data(), exeLen, nullptr, nullptr);
+            std::string exeNameA = wideToUtf8(p.exeName);
             std::cout << "PID " << p.pid << " (" << exeNameA << "):\n";
 
             if (cmdLine.empty()) {

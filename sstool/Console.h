@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <chrono>
 #include <thread>
+#include <algorithm>
 
 // ============================================================
 //  Console.h  --  Rich console UI helpers
@@ -41,6 +42,9 @@ namespace con {
 
     inline void reset() { set(Color::White); }
 
+    inline constexpr int UiWidth = 68;
+    inline constexpr const char* Credit = "ss tools by nosaka&aruel";
+
     // Print text in a color, then reset
     inline void print(const std::string& text, Color c, bool newline = false) {
         set(c);
@@ -55,8 +59,30 @@ namespace con {
 
     // ---- UI Elements -------------------------------------------
 
+    inline void divider(char ch = '-', int width = UiWidth, Color c = Color::DarkGray);
+
+    inline void titleCard(const std::string& title, const std::string& subtitle) {
+        divider('=', UiWidth, Color::Cyan);
+        set(Color::Cyan);
+        std::cout << "  " << title << "\n";
+        set(Color::Gray);
+        std::cout << "  " << subtitle << "\n";
+        set(Color::Magenta);
+        std::cout << "  " << Credit << "\n";
+        divider('=', UiWidth, Color::Cyan);
+        reset();
+    }
+
+    inline void menuHeader(const std::string& text) {
+        divider('=', UiWidth, Color::Cyan);
+        set(Color::Cyan);
+        std::cout << "  " << text << "\n";
+        divider('=', UiWidth, Color::Cyan);
+        reset();
+    }
+
     // Full-width horizontal divider
-    inline void divider(char ch = '-', int width = 60, Color c = Color::DarkGray) {
+    inline void divider(char ch, int width, Color c) {
         set(c);
         std::cout << std::string(width, ch) << "\n";
         reset();
@@ -65,13 +91,13 @@ namespace con {
     // Section header with thick border
     inline void header(const std::string& text, Color c = Color::Cyan) {
         std::cout << "\n";
-        divider('=', 60, c);
+        divider('=', UiWidth, c);
         set(c);
-        // Center the text in 60 chars
-        int pad = (58 - (int)text.size()) / 2;
+        // Center the text in the current UI width.
+        int pad = (UiWidth - 2 - (int)text.size()) / 2;
         if (pad < 0) pad = 0;
         std::cout << "  " << std::string(pad, ' ') << text << "\n";
-        divider('=', 60, c);
+        divider('=', UiWidth, c);
         reset();
     }
 
@@ -80,7 +106,7 @@ namespace con {
         std::cout << "\n";
         set(c);
         std::cout << "  >> " << text << "\n";
-        divider('-', 60, c);
+        divider('-', UiWidth, c);
         reset();
     }
 
@@ -95,12 +121,12 @@ namespace con {
     // Step indicator: "  Step 2/4  Scan Memory"
     inline void step(int current, int total, const std::string& desc) {
         std::cout << "\n";
-        divider('-', 60, Color::DarkGray);
+        divider('-', UiWidth, Color::DarkGray);
         set(Color::Cyan);
         std::cout << "  Step " << current << "/" << total << "  ";
         set(Color::White);
         std::cout << desc << "\n";
-        divider('-', 60, Color::DarkGray);
+        divider('-', UiWidth, Color::DarkGray);
         reset();
     }
 
@@ -145,8 +171,10 @@ namespace con {
     // Progress bar: "  [=========>    ] 70%"
     inline void progressBar(int done, int total, int width = 40) {
         if (total == 0) return;
-        int filled = (done * width) / total;
-        int pct = (done * 100) / total;
+        done = std::clamp(done, 0, total);
+        width = std::max(width, 1);
+        int filled = std::clamp((done * width) / total, 0, width);
+        int pct = std::clamp((done * 100) / total, 0, 100);
 
         set(Color::Cyan);
         std::cout << "\r  [";
@@ -155,7 +183,7 @@ namespace con {
         if (filled < width) {
             std::cout << ">";
             set(Color::DarkGray);
-            std::cout << std::string(width - filled - 1, ' ');
+            std::cout << std::string(std::max(width - filled - 1, 0), ' ');
         }
         set(Color::Cyan);
         std::cout << "] ";
@@ -168,15 +196,15 @@ namespace con {
     inline void resultSummary(bool clean, int hits, const std::string& context) {
         std::cout << "\n";
         if (clean) {
-            divider('=', 60, Color::Green);
+            divider('=', UiWidth, Color::Green);
             set(Color::Green);
             std::cout << "  RESULT:  CLEAN -- No " << context << " found.\n";
-            divider('=', 60, Color::Green);
+            divider('=', UiWidth, Color::Green);
         } else {
-            divider('=', 60, Color::Red);
+            divider('=', UiWidth, Color::Red);
             set(Color::Red);
             std::cout << "  RESULT:  FLAGGED -- " << hits << " " << context << " detected.\n";
-            divider('=', 60, Color::Red);
+            divider('=', UiWidth, Color::Red);
         }
         reset();
     }

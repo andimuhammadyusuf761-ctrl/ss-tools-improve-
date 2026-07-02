@@ -10,6 +10,10 @@
 #include <cstdlib>
 #include <string>
 #include <iostream>
+#include <chrono>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 
 // =====================================================================
 // Pattern lists
@@ -527,7 +531,7 @@ std::vector<std::string_view> universalPatterns = {
 
 static void waitEnter() {
     con::dim("Press Enter to continue...");
-    std::cin.ignore(10000, '\n');
+    if (std::cin.rdbuf()->in_avail() > 0) std::cin.ignore(10000, '\n');
     std::cin.get();
 }
 
@@ -540,6 +544,21 @@ static int readInt() {
         return -1;
     }
     return v;
+}
+
+static void discardLine() {
+    std::cin.ignore(10000, '\n');
+}
+
+static std::string currentLocalDateTime() {
+    auto now = std::chrono::system_clock::now();
+    std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+    localtime_s(&tm, &t);
+
+    std::ostringstream out;
+    out << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
+    return out.str();
 }
 
 // =====================================================================
@@ -614,6 +633,10 @@ void runMemoryScan() {
 
     // --- Results ---
     con::subheader("Scan Results");
+    con::dim("Scanner version: SS TOOLS v1.4");
+    con::dim("Scan date/time: " + currentLocalDateTime());
+    con::dim("Strings checked: " + std::to_string(scannable.size()));
+    con::dim("Strings found: " + std::to_string(results.size()) + " string(s)");
 
     size_t utf16Hits = 0;
     size_t boundaryHits = 0;
@@ -680,7 +703,7 @@ void runModsFolderScanMenu() {
     }
     con::prompt("Paste mods folder path (or press Enter for default):");
 
-    std::cin.ignore();
+    discardLine();
     std::string input;
     std::getline(std::cin, input);
 
@@ -761,9 +784,10 @@ void runJvmFlagsScan() {
     con::dim("(Queries WMI via PowerShell -- may take a moment)\n");
 
     bool anyFinding = false;
+    int findingCount = 0;
 
     for (const auto& p : procs) {
-        std::string exeNameA(p.exeName.begin(), p.exeName.end());
+        std::string exeNameA = jvmscan::wideToUtf8(p.exeName);
 
         con::subheader("PID " + std::to_string(p.pid) + "  (" + exeNameA + ")");
 
@@ -785,6 +809,7 @@ void runJvmFlagsScan() {
             con::ok("No suspicious JVM flags or unrecognized agents found.");
         } else {
             anyFinding = true;
+            findingCount += (int)findings.size();
             for (const auto& f : findings) {
                 if (f.severity == con::Color::Red)    con::bad(f.text);
                 else if (f.severity == con::Color::Yellow) con::warn(f.text);
@@ -793,7 +818,7 @@ void runJvmFlagsScan() {
         }
     }
 
-    con::resultSummary(!anyFinding, anyFinding ? 1 : 0, "suspicious JVM flags");
+    con::resultSummary(!anyFinding, findingCount, "suspicious JVM flag(s)");
     waitEnter();
 }
 
@@ -808,13 +833,16 @@ void runMacroSoftwareScan() {
     con::dim("  1. Running processes (exe name match)");
     con::dim("  2. Open window titles (catches renamed executables)");
     con::dim("  3. Installed programs via Windows registry");
+    con::dim("When a match is found, this scan opens the evidence location.");
+    con::dim("  - AutoHotkey / generic macro hits open their folder");
+    con::dim("  - 198M Macro / Zenith Macro hits open the app itself");
     std::cout << "\n";
-    con::dim("Keywords searched: '198m macro', '198macro', 'zenith macro'\n");
+    con::dim("Keywords searched: '198m macro', '198macro', 'zenith macro', 'autohotkey', '.ahk'\n");
 
     con::step(2, 3, "Scanning Running Processes & Window Titles");
 
     static const std::vector<std::string> macroKeywords = {
-        "198m macro", "198macro", "zenith macro"
+        "198m macro", "198macro", "zenith macro", "auto hotkey", "autohotkey", ".ahk"
     };
 
     auto procHits    = scanRunningProcesses(macroKeywords);
@@ -822,16 +850,20 @@ void runMacroSoftwareScan() {
 
     if (!procHits.empty()) {
         con::subheader("Running Process Matches");
-        for (const auto& h : procHits)
+        for (const auto& h : procHits) {
             con::bad("Process: " + h.name + "  (PID " + std::to_string(h.pid) + ")");
+            if (!h.path.empty()) con::dim("Path: " + h.path);
+        }
     } else {
         con::ok("No macro processes running.");
     }
 
     if (!winHits.empty()) {
         con::subheader("Window Title Matches");
-        for (const auto& h : winHits)
+        for (const auto& h : winHits) {
             con::bad("Window: \"" + h.name + "\"  (PID " + std::to_string(h.pid) + ")");
+            if (!h.path.empty()) con::dim("Path: " + h.path);
+        }
     } else {
         con::ok("No macro-related window titles found.");
     }
@@ -842,13 +874,34 @@ void runMacroSoftwareScan() {
 
     if (!installHits.empty()) {
         con::subheader("Installed Program Matches");
-        for (const auto& h : installHits)
+        for (const auto& h : installHits) {
             con::bad("Installed: " + h.name);
+            if (!h.path.empty()) con::dim("Path: " + h.path);
+        }
     } else {
         con::ok("No macro software found in installed programs.");
     }
 
     int total = (int)(procHits.size() + winHits.size() + installHits.size());
+    if (total > 0) {
+        con::subheader("Opening Evidence");
+        int opened = 0;
+        std::vector<MacroHit> allHits;
+        allHits.insert(allHits.end(), procHits.begin(), procHits.end());
+        allHits.insert(allHits.end(), winHits.begin(), winHits.end());
+        allHits.insert(allHits.end(), installHits.begin(), installHits.end());
+
+        for (const auto& hit : allHits) {
+            if (openEvidencePath(hit)) {
+                opened++;
+                if (is198mOrZenith(hit)) con::ok("Opened app for: " + hit.name);
+                else con::ok("Opened folder for: " + hit.name);
+            } else {
+                con::warn("Could not auto-open evidence for: " + hit.name);
+            }
+        }
+        con::info("Opened " + std::to_string(opened) + "/" + std::to_string(total) + " evidence location(s).");
+    }
     con::resultSummary(total == 0, total, "macro software trace(s)");
     waitEnter();
 }
@@ -862,15 +915,8 @@ static void printBanner() {
     GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode);
     SetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 
-    con::set(con::Color::Cyan);
     std::cout << "\n";
-    std::cout << "  ============================================================\n";
-    std::cout << "  |                                                          |\n";
-    std::cout << "  |            SS TOOL  --  by lvstrng  v1.3                |\n";
-    std::cout << "  |         Minecraft Screenshare / Cheat Detection          |\n";
-    std::cout << "  |                                                          |\n";
-    std::cout << "  ============================================================\n";
-    con::reset();
+    con::titleCard("SS TOOLS  v1.4", "Minecraft Screenshare / Cheat Detection");
     std::cout << "\n";
     con::dim("  Run as Administrator for full memory read access.");
     con::dim("  All scans are read-only -- nothing is modified on this PC.\n");
@@ -883,10 +929,7 @@ int main() {
     printBanner();
 
     while (true) {
-        con::divider('=', 60, con::Color::Cyan);
-        con::set(con::Color::Cyan);
-        std::cout << "  MAIN MENU\n";
-        con::divider('=', 60, con::Color::Cyan);
+        con::menuHeader("MAIN MENU  --  choose a step-by-step scan");
         std::cout << "\n";
 
         struct MenuItem { const char* label; const char* desc; };
@@ -900,8 +943,8 @@ int main() {
 
         for (int i = 0; i < 5; i++) {
             con::set(con::Color::Cyan);
-            std::cout << "    [" << (i + 1) << "] ";
-            con::set(con::Color::White);
+            std::cout << "    " << (i + 1) << ". ";
+            con::set(i == 4 ? con::Color::Yellow : con::Color::White);
             std::cout << items[i].label;
             if (items[i].desc[0]) {
                 con::set(con::Color::Gray);
@@ -911,7 +954,7 @@ int main() {
             con::reset();
         }
 
-        con::prompt("Choose an option (1-5):");
+        con::prompt("Choose an option (1-5), then follow the guided steps:");
         int choice = readInt();
         std::cout << "\n";
 
@@ -926,9 +969,9 @@ int main() {
     }
 
     std::cout << "\n";
-    con::divider('=', 60, con::Color::Gray);
+    con::divider('=', con::UiWidth, con::Color::Gray);
     con::dim("  Exiting SS Tool. Goodbye.");
-    con::divider('=', 60, con::Color::Gray);
+    con::divider('=', con::UiWidth, con::Color::Gray);
     std::cout << "\n";
 
     return 0;
