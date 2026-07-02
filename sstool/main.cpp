@@ -10,6 +10,10 @@
 #include <cstdlib>
 #include <string>
 #include <iostream>
+#include <chrono>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 
 // =====================================================================
 // Pattern lists
@@ -546,6 +550,17 @@ static void discardLine() {
     std::cin.ignore(10000, '\n');
 }
 
+static std::string currentLocalDateTime() {
+    auto now = std::chrono::system_clock::now();
+    std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+    localtime_s(&tm, &t);
+
+    std::ostringstream out;
+    out << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
+    return out.str();
+}
+
 // =====================================================================
 // Step-by-step: Memory Scan
 // =====================================================================
@@ -618,6 +633,10 @@ void runMemoryScan() {
 
     // --- Results ---
     con::subheader("Scan Results");
+    con::dim("Scanner version: SS TOOLS v1.4");
+    con::dim("Scan date/time: " + currentLocalDateTime());
+    con::dim("Strings checked: " + std::to_string(scannable.size()));
+    con::dim("Strings found: " + std::to_string(results.size()) + " string(s)");
 
     size_t utf16Hits = 0;
     size_t boundaryHits = 0;

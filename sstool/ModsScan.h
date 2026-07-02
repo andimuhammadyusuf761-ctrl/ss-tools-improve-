@@ -269,10 +269,44 @@ namespace modscan {
 
     struct JarReport {
         std::string jarName;
+        std::string modId;
+        std::string modName;
+        std::string modVersion;
+        int classCount = 0;
         std::vector<Finding> findings;
         std::set<std::string> matchedStrings;
         std::optional<std::string> downloadSource; // friendly name, if Zone.Identifier present
     };
+
+    static std::optional<std::string> readJsonStringField(const std::string& json, const std::string& field) {
+        std::string key = "\"" + field + "\"";
+        size_t idPos = json.find(key);
+        if (idPos == std::string::npos) return std::nullopt;
+        size_t colon = json.find(':', idPos + key.size());
+        if (colon == std::string::npos) return std::nullopt;
+        size_t q1 = json.find('"', colon + 1);
+        size_t q2 = (q1 == std::string::npos) ? std::string::npos : json.find('"', q1 + 1);
+        if (q1 == std::string::npos || q2 == std::string::npos) return std::nullopt;
+        return json.substr(q1 + 1, q2 - q1 - 1);
+    }
+
+    static bool isKnownLegitModId(const std::string& modId) {
+        if (modId.empty()) return false;
+        std::string lower = toLowerStr(modId);
+        return std::find(kKnownLegitModIds.begin(), kKnownLegitModIds.end(), lower) != kKnownLegitModIds.end();
+    }
+
+    static bool isHighConfidenceCheatString(const std::string& s) {
+        static const std::vector<std::string> highConfidence = {
+            "novaclient", "vape.gg", "vapeclient", "VapeLite", "meteor-client",
+            "liquidbounce", "fdp-client", "AutoCrystal", "AutoHitCrystal",
+            "Anchor Macro", "TriggerBot", "AimAssist", "SilentAim",
+            "SelfDestruct", "AuthBypass", "LicenseCheckMixin", "dqrkis",
+            "Dqrkis Client", "ArgonClient", "CatleanClient", "PrestigeClient",
+            "dev.krypton", "skid.krypton", "phantom-refmap.json", "cheat-refmap.json",
+        };
+        return std::find(highConfidence.begin(), highConfidence.end(), s) != highConfidence.end();
+    }
 
     inline JarReport scanSingleJar(const fs::path& jarPath) {
         JarReport report;
@@ -322,6 +356,7 @@ namespace modscan {
 
                 if (ext == ".class") {
                     tallyClassName(relStr, stats);
+                    report.classCount++;
                 } else if (relStr != "fabric.mod.json" && ext != ".json" && fname != "MANIFEST.MF") {
                     continue; // only inspect class files, mod metadata, and the manifest
                 }
@@ -330,15 +365,12 @@ namespace modscan {
                 if (bytes.empty()) continue;
 
                 if (relStr == "fabric.mod.json") {
-                    size_t idPos = bytes.find("\"id\"");
-                    if (idPos != std::string::npos) {
-                        size_t colon = bytes.find(':', idPos);
-                        size_t q1 = bytes.find('"', colon + 1);
-                        size_t q2 = (q1 == std::string::npos) ? std::string::npos : bytes.find('"', q1 + 1);
-                        if (q1 != std::string::npos && q2 != std::string::npos) {
-                            outerModId = bytes.substr(q1 + 1, q2 - q1 - 1);
-                        }
+                    if (auto id = readJsonStringField(bytes, "id")) {
+                        outerModId = *id;
+                        report.modId = *id;
                     }
+                    if (auto name = readJsonStringField(bytes, "name")) report.modName = *name;
+                    if (auto version = readJsonStringField(bytes, "version")) report.modVersion = *version;
                 }
 
                 // cheat-string content matching applies to class files, mod
@@ -429,13 +461,20 @@ namespace modscan {
         }
 
         bool hasDangerFinding = std::any_of(report.findings.begin(), report.findings.end(), [](const Finding& f) { return f.severity == Severity::Danger; });
-        if (!outerModId.empty() && hasDangerFinding &&
-            std::find(kKnownLegitModIds.begin(), kKnownLegitModIds.end(), outerModId) != kKnownLegitModIds.end()) {
+        bool knownLegitMod = isKnownLegitModId(outerModId);
+        if (!outerModId.empty() && hasDangerFinding && knownLegitMod) {
             report.findings.push_back({ Severity::Danger, "Fake mod identity -- claims to be '" + outerModId + "' but contains dangerous code" });
         }
 
         if (!report.matchedStrings.empty()) {
-            report.findings.push_back({ Severity::Danger, std::to_string(report.matchedStrings.size()) + " cheat/macro identifier(s) matched -- see list below" });
+            bool anyHighConfidence = std::any_of(report.matchedStrings.begin(), report.matchedStrings.end(), isHighConfidenceCheatString);
+            if (knownLegitMod && !hasDangerFinding) {
+                report.matchedStrings.clear();
+            } else if (anyHighConfidence || report.matchedStrings.size() >= 2 || hasDangerFinding) {
+                report.findings.push_back({ Severity::Danger, std::to_string(report.matchedStrings.size()) + " cheat/macro identifier(s) matched -- see list below" });
+            } else {
+                report.matchedStrings.clear();
+            }
         }
 
         return report;
@@ -463,6 +502,14 @@ namespace modscan {
 
         if (r.downloadSource) {
             con::dim("Downloaded via: " + *r.downloadSource);
+        }
+        if (!r.modId.empty() || !r.modVersion.empty() || r.classCount > 0) {
+            std::string meta = "Mod metadata:";
+            if (!r.modName.empty()) meta += " name=" + r.modName;
+            if (!r.modId.empty()) meta += " id=" + r.modId;
+            if (!r.modVersion.empty()) meta += " version=" + r.modVersion;
+            if (r.classCount > 0) meta += " classes=" + std::to_string(r.classCount);
+            con::dim(meta);
         }
 
         for (const auto& f : r.findings) {
