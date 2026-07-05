@@ -14,6 +14,7 @@
 #include "CheatStrings.h"
 #include "JarUtil.h"
 #include "Console.h"
+#include "Util.h"
 
 // =====================================================================
 // Static analysis of .jar files in a mods folder.
@@ -35,12 +36,8 @@ namespace modscan {
 
     namespace fs = std::filesystem;
 
-    enum class Severity { Info, Warning, Danger };
-
-    struct Finding {
-        Severity severity;
-        std::string text;
-    };
+    using Severity = util::Severity;
+    using Finding = util::Finding;
 
     static std::string toLowerStr(std::string s) {
         std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
@@ -466,9 +463,7 @@ namespace modscan {
         }
 
         for (const auto& f : r.findings) {
-            if      (f.severity == Severity::Danger)  con::bad(f.text);
-            else if (f.severity == Severity::Warning)  con::warn(f.text);
-            else                                       con::info(f.text);
+            con::finding(f.severity, f.text);
         }
 
         if (!r.matchedStrings.empty()) {
@@ -498,17 +493,19 @@ namespace modscan {
             if (ext == ".jar") jars.push_back(entry.path());
         }
 
-        std::cout << "\nScanning " << jars.size() << " jar file(s) in " << modsPath.string() << "...\n";
+        con::info("Scanning " + std::to_string(jars.size()) + " jar file(s) in " + modsPath.string() + "...");
 
         int flaggedCount = 0;
-        for (const auto& jar : jars) {
-            std::cout << "." << std::flush;
-            JarReport r = scanSingleJar(jar);
+        for (size_t i = 0; i < jars.size(); i++) {
+            con::progressBar((int)i, (int)jars.size());
+            JarReport r = scanSingleJar(jars[i]);
             if (!r.findings.empty()) {
                 flaggedCount++;
+                std::cout << "\n"; // move past the in-place progress bar before the report
                 printReport(r);
             }
         }
+        con::progressBar((int)jars.size(), (int)jars.size());
 
         std::cout << "\n\n";
         if (flaggedCount == 0) {

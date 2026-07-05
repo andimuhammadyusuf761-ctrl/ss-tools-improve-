@@ -139,6 +139,11 @@
     <ClInclude Include="JarUtil.h" />
     <ClInclude Include="CheatStrings.h" />
     <ClInclude Include="Console.h" />
+    <ClInclude Include="JavaProcessResolve.h" />
+    <ClInclude Include="ModuleScan.h" />
+    <ClInclude Include="SystemForensics.h" />
+    <ClInclude Include="MacroSignature.h" />
+    <ClInclude Include="Util.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

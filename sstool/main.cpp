@@ -1,11 +1,15 @@
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include "Console.h"
+#include "Util.h"
 #include "PatternScan.h"
 #include "ProcessScan.h"
 #include "ModsScan.h"
 #include "JvmScan.h"
 #include "JavaProcessResolve.h"
+#include "ModuleScan.h"
+#include "SystemForensics.h"
+#include "MacroSignature.h"
 #include <filesystem>
 #include <cstdlib>
 #include <string>
@@ -785,11 +789,7 @@ void runJvmFlagsScan() {
             con::ok("No suspicious JVM flags or unrecognized agents found.");
         } else {
             anyFinding = true;
-            for (const auto& f : findings) {
-                if (f.severity == con::Color::Red)    con::bad(f.text);
-                else if (f.severity == con::Color::Yellow) con::warn(f.text);
-                else con::info(f.text);
-            }
+            for (const auto& f : findings) con::finding(f.severity, f.text);
         }
     }
 
@@ -803,40 +803,70 @@ void runJvmFlagsScan() {
 void runMacroSoftwareScan() {
     con::header("MACRO SOFTWARE SCAN  --  198M / Zenith Detection");
 
-    con::step(1, 3, "What This Scan Checks");
-    con::dim("Looks for macro software in three places:");
+    con::step(1, 4, "What This Scan Checks");
+    con::dim("Looks for macro software in four places:");
     con::dim("  1. Running processes (exe name match)");
     con::dim("  2. Open window titles (catches renamed executables)");
     con::dim("  3. Installed programs via Windows registry");
+    con::dim("  4. Executable signatures (embedded strings + import table --");
+    con::dim("     catches renamed AND repacked copies of known macro builds)");
     std::cout << "\n";
     con::dim("Keywords searched: '198m macro', '198macro', 'zenith macro'\n");
 
-    con::step(2, 3, "Scanning Running Processes & Window Titles");
+    con::step(2, 4, "Scanning Running Processes & Window Titles");
 
-    static const std::vector<std::string> macroKeywords = {
-        "198m macro", "198macro", "zenith macro"
-    };
+    // Uses the single canonical keyword list defined in ProcessScan.h
+    // (also shared with MacroSignature.h's signature sweep), rather than
+    // a second copy that could quietly drift out of sync with it.
 
-    auto procHits    = scanRunningProcesses(macroKeywords);
-    auto winHits     = scanWindowTitles(macroKeywords);
+    auto procHits = scanRunningProcesses(macroKeywords);
+    auto winHits  = scanWindowTitles(macroKeywords);
 
-    if (!procHits.empty()) {
-        con::subheader("Running Process Matches");
-        for (const auto& h : procHits)
-            con::bad("Process: " + h.name + "  (PID " + std::to_string(h.pid) + ")");
+    // Collect all live hits (process + window) into one list so we can
+    // attempt to bring each macro window to the foreground once.
+    std::vector<MacroHit> liveHits;
+    liveHits.insert(liveHits.end(), procHits.begin(), procHits.end());
+    liveHits.insert(liveHits.end(), winHits.begin(),  winHits.end());
+
+    if (!liveHits.empty()) {
+        con::subheader("Live Macro Software Detected");
+        for (const auto& h : liveHits) {
+            if (h.source == "process")
+                con::bad("Process: " + h.name + "  (PID " + std::to_string(h.pid) + ")");
+            else
+                con::bad("Window:  \"" + h.name + "\"  (PID " + std::to_string(h.pid) + ")");
+        }
+
+        // Auto-bring every matched macro window to the foreground so the
+        // SS-er can see the app on-screen immediately, without giving the
+        // suspect time to hide or close it.
+        std::cout << "\n";
+        con::set(con::Color::Yellow);
+        std::cout << "  [>>] Bringing macro window(s) to the foreground...\n";
+        con::reset();
+
+        int surfaced = 0;
+        for (const auto& h : liveHits) {
+            if (bringMacroWindowToForeground(h)) {
+                con::ok("Surfaced window for: " + h.name +
+                    "  (PID " + std::to_string(h.pid) + ")");
+                surfaced++;
+                Sleep(300); // brief delay between windows so they don't overlap instantly
+            }
+        }
+
+        if (surfaced == 0) {
+            con::warn("Process found but no visible window located -- may be running as");
+            con::dim("a tray/background app. Check the system tray manually.");
+        } else {
+            con::dim("The macro app is now visible on screen.");
+            con::dim("Take a screenshot now as evidence before continuing.");
+        }
     } else {
-        con::ok("No macro processes running.");
+        con::ok("No macro processes or windows found.");
     }
 
-    if (!winHits.empty()) {
-        con::subheader("Window Title Matches");
-        for (const auto& h : winHits)
-            con::bad("Window: \"" + h.name + "\"  (PID " + std::to_string(h.pid) + ")");
-    } else {
-        con::ok("No macro-related window titles found.");
-    }
-
-    con::step(3, 3, "Scanning Installed Programs (Registry)");
+    con::step(3, 4, "Scanning Installed Programs (Registry)");
 
     auto installHits = scanInstalledPrograms(macroKeywords);
 
@@ -848,32 +878,147 @@ void runMacroSoftwareScan() {
         con::ok("No macro software found in installed programs.");
     }
 
-    int total = (int)(procHits.size() + winHits.size() + installHits.size());
+    con::step(4, 4, "Executable Signature Sweep (Embedded Strings + Import Table)");
+    con::dim("Checking every running process' exe on disk for known build strings");
+    con::dim("(\"macros-unprotected.pdb\", \"AVMacro\" RTTI, \"/hwidLogin\") and the");
+    con::dim("SetWindowsHookExW + SendInput import combo -- this still catches a");
+    con::dim("copy that's been renamed or rebuilt with a different packer.\n");
+
+    auto sigMatches = macrosig::scanAllProcessesForSignatures();
+
+    if (!sigMatches.empty()) {
+        con::subheader("Executable Signature Matches");
+        for (const auto& m : sigMatches) {
+            std::string line = m.processName + "  (PID " + std::to_string(m.pid) + ")  --  " + m.finding.text;
+            con::finding(m.finding.severity, line);
+            con::dim(m.exePath);
+        }
+    } else {
+        con::ok("No executable signature matches found.");
+    }
+
+    int total = (int)(liveHits.size() + installHits.size() + sigMatches.size());
     con::resultSummary(total == 0, total, "macro software trace(s)");
+    waitEnter();
+}
+
+// =====================================================================
+// Step-by-step: Loaded Module (DLL Injection) Scan
+// =====================================================================
+void runModuleScan() {
+    con::header("MODULE SCAN  --  Native DLL Injection Detection");
+
+    con::step(1, 2, "Select Minecraft Process");
+    con::dim("Looking for running java/javaw processes...\n");
+
+    HANDLE handle = resolveJavawTarget();
+    if (!handle) {
+        con::bad("No process selected. Returning to main menu.");
+        waitEnter();
+        return;
+    }
+    DWORD pid = GetProcessId(handle);
+    CloseHandle(handle);
+
+    con::step(2, 2, "Enumerating Loaded Modules");
+    con::dim("Checks every DLL loaded into the process for:");
+    con::dim("  - Suspicious names (inject/hook/cheat/bypass, etc.)");
+    con::dim("  - Loading from Temp/Downloads/Desktop instead of a real install");
+    con::dim("  - Randomized-looking filenames (common injector payload naming)");
+    con::dim("  - Any location outside the JRE/Windows/Minecraft natives dirs\n");
+
+    auto findings = modulescan::scanProcessModules(pid);
+
+    con::subheader("Scan Results");
+
+    int dangerCount = 0, warnCount = 0;
+    for (const auto& f : findings) {
+        std::string line = f.name + "  --  " + f.reason;
+        if (f.severity == modulescan::Severity::Danger) dangerCount++;
+        else if (f.severity == modulescan::Severity::Warning) warnCount++;
+        else continue;
+        con::finding(f.severity, line);
+        con::dim(f.path);
+    }
+
+    if (dangerCount == 0 && warnCount == 0) {
+        con::ok("All loaded modules resolve to trusted, standard locations.");
+    } else {
+        con::info(std::to_string(dangerCount) + " high-confidence and " +
+            std::to_string(warnCount) + " lower-confidence finding(s). Review paths above --");
+        con::dim("this is heuristic, not a signature match; confirm manually before acting.");
+    }
+
+    con::resultSummary(dangerCount == 0, dangerCount, "suspicious loaded module(s)");
+    waitEnter();
+}
+
+// =====================================================================
+// Step-by-step: System Forensics Scan
+// =====================================================================
+void runSystemForensicsScan() {
+    con::header("SYSTEM FORENSICS SCAN  --  Persistence & Usage Traces");
+
+    con::dim("Looks for OS-level traces a cheat client or injector leaves behind");
+    con::dim("even after the jar/exe itself has been deleted.\n");
+
+    struct CheckStep {
+        const char* title;
+        std::vector<sysforensics::Finding> (*fn)();
+    };
+    static const CheckStep steps[] = {
+        { "Prefetch Execution History",      sysforensics::checkPrefetchTraces      },
+        { "Startup / Autorun Persistence",   sysforensics::checkStartupPersistence  },
+        { "Recently Opened .jar Files",      sysforensics::checkRecentJarFiles      },
+        { "Scheduled Tasks",                 sysforensics::checkScheduledTasks      },
+        { "Hosts File Tampering",            sysforensics::checkHostsFile           },
+        { "Suspicious Standalone Processes", sysforensics::checkSuspiciousProcesses },
+    };
+
+    int total = (int)(sizeof(steps) / sizeof(steps[0]));
+    int dangerCount = 0;
+
+    for (int i = 0; i < total; i++) {
+        con::step(i + 1, total, steps[i].title);
+        auto findings = steps[i].fn();
+        for (const auto& f : findings) {
+            if (f.severity == sysforensics::Severity::Danger) dangerCount++;
+            con::finding(f.severity, f.text);
+        }
+    }
+
+    con::resultSummary(dangerCount == 0, dangerCount, "persistence/usage trace(s)");
     waitEnter();
 }
 
 // =====================================================================
 // Startup banner
 // =====================================================================
+static const char* kToolVersion = "v1.4";
+
 static void printBanner() {
     // Enable ANSI / virtual terminal (Windows 10+)
     DWORD mode = 0;
     GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode);
     SetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 
-    con::set(con::Color::Cyan);
+    con::box({
+        "",
+        std::string("SS TOOL  --  by lvstrng  ") + kToolVersion,
+        "Minecraft Screenshare / Cheat Detection",
+        "",
+    }, 60, con::Color::Cyan);
+
     std::cout << "\n";
-    std::cout << "  ============================================================\n";
-    std::cout << "  |                                                          |\n";
-    std::cout << "  |            SS TOOL  --  by lvstrng  v1.3                |\n";
-    std::cout << "  |         Minecraft Screenshare / Cheat Detection          |\n";
-    std::cout << "  |                                                          |\n";
-    std::cout << "  ============================================================\n";
-    con::reset();
+    bool elevated = util::isRunningElevated();
+    con::statusLine("Mode", "Read-only  (nothing on this PC is modified)", con::Color::Green);
+    con::statusLine("Running as", elevated ? "Administrator" : "Standard user",
+        elevated ? con::Color::Green : con::Color::Yellow);
+    if (!elevated) {
+        con::statusLine("", "Re-run as Administrator for full memory read access.", con::Color::Gray);
+    }
+    con::statusLine("Modules", "6 scans  (Memory / Mods / JVM / Macro / Module / Forensics)", con::Color::White);
     std::cout << "\n";
-    con::dim("  Run as Administrator for full memory read access.");
-    con::dim("  All scans are read-only -- nothing is modified on this PC.\n");
 }
 
 // =====================================================================
@@ -883,52 +1028,59 @@ int main() {
     printBanner();
 
     while (true) {
-        con::divider('=', 60, con::Color::Cyan);
-        con::set(con::Color::Cyan);
-        std::cout << "  MAIN MENU\n";
-        con::divider('=', 60, con::Color::Cyan);
+        con::box({ "MAIN MENU" }, 60, con::Color::Cyan);
         std::cout << "\n";
 
         struct MenuItem { const char* label; const char* desc; };
-        static const MenuItem items[] = {
-            { "Memory Scan",        "Scan live Minecraft RAM for cheat client strings"    },
-            { "Mods Folder Scan",   "Static analysis of .jar files for cheat code"        },
-            { "JVM Flags Scan",     "Detect injected -javaagent and suspicious JVM flags" },
-            { "Macro Scan",         "Check for 198M / Zenith macro software"              },
-            { "Exit",               ""                                                    },
+
+        con::set(con::Color::Magenta);
+        std::cout << "  -- Live process scans --\n";
+        con::reset();
+        static const MenuItem liveItems[] = {
+            { "Memory Scan",      "Scan live Minecraft RAM for cheat client strings"    },
+            { "JVM Flags Scan",   "Detect injected -javaagent and suspicious JVM flags" },
+            { "Module Scan",      "Detect injected/suspicious DLLs in the java process" },
         };
+        for (int i = 0; i < 3; i++) con::menuItem(i + 1, std::string(liveItems[i].label) + "  --  " + liveItems[i].desc);
 
-        for (int i = 0; i < 5; i++) {
-            con::set(con::Color::Cyan);
-            std::cout << "    [" << (i + 1) << "] ";
-            con::set(con::Color::White);
-            std::cout << items[i].label;
-            if (items[i].desc[0]) {
-                con::set(con::Color::Gray);
-                std::cout << "  --  " << items[i].desc;
-            }
-            std::cout << "\n";
-            con::reset();
-        }
+        std::cout << "\n";
+        con::set(con::Color::Magenta);
+        std::cout << "  -- Static / on-disk scans --\n";
+        con::reset();
+        static const MenuItem staticItems[] = {
+            { "Mods Folder Scan", "Static analysis of .jar files for cheat code"       },
+            { "Macro Scan",       "198M/Zenith detection: process, window, registry,"
+                                   " and executable-signature sweep"                    },
+        };
+        con::menuItem(4, std::string(staticItems[0].label) + "  --  " + staticItems[0].desc);
+        con::menuItem(5, std::string(staticItems[1].label) + "  --  " + staticItems[1].desc);
 
-        con::prompt("Choose an option (1-5):");
+        std::cout << "\n";
+        con::set(con::Color::Magenta);
+        std::cout << "  -- System-wide forensics --\n";
+        con::reset();
+        con::menuItem(6, "System Forensics  --  Prefetch, autorun, tasks, hosts file, recent jars");
+
+        std::cout << "\n";
+        con::menuItem(7, "Exit");
+
+        con::prompt("Choose an option (1-7):");
         int choice = readInt();
         std::cout << "\n";
 
         if      (choice == 1) runMemoryScan();
-        else if (choice == 2) runModsFolderScanMenu();
-        else if (choice == 3) runJvmFlagsScan();
-        else if (choice == 4) runMacroSoftwareScan();
-        else if (choice == 5) break;
+        else if (choice == 2) runJvmFlagsScan();
+        else if (choice == 3) runModuleScan();
+        else if (choice == 4) runModsFolderScanMenu();
+        else if (choice == 5) runMacroSoftwareScan();
+        else if (choice == 6) runSystemForensicsScan();
+        else if (choice == 7) break;
         else {
-            con::warn("Invalid choice. Please enter 1-5.");
+            con::warn("Invalid choice. Please enter 1-7.");
         }
     }
 
-    std::cout << "\n";
-    con::divider('=', 60, con::Color::Gray);
-    con::dim("  Exiting SS Tool. Goodbye.");
-    con::divider('=', 60, con::Color::Gray);
+    con::box({ "Exiting SS Tool. Goodbye." }, 60, con::Color::Gray);
     std::cout << "\n";
 
     return 0;

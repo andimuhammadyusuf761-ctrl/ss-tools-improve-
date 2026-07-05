@@ -12,6 +12,7 @@
 #include <cwctype>
 
 #include "Console.h"
+#include "Util.h"
 
 // Some cheat-injection methods work by launching (or relaunching)
 // Minecraft's JVM with extra command-line flags rather than modifying any
@@ -78,7 +79,7 @@ namespace jvmscan {
     }
 
     struct JvmFinding {
-        con::Color severity;
+        util::Severity severity;
         std::string text;
     };
 
@@ -102,7 +103,7 @@ namespace jvmscan {
                     [&](const std::string& m) { return lowerPath.find(m) != std::string::npos; });
 
                 if (!isLegit) {
-                    findings.push_back({ con::Color::Red, "JVM agent injected -- -javaagent:" + agentPath });
+                    findings.push_back({ util::Severity::Danger, "JVM agent injected -- -javaagent:" + agentPath });
                 }
             }
         } catch (const std::regex_error&) { /* malformed cmdline text, skip agent parsing */ }
@@ -116,47 +117,10 @@ namespace jvmscan {
         };
         for (const auto& sf : suspiciousFlags) {
             if (cmdLine.find(sf.flag) != std::string::npos) {
-                findings.push_back({ con::Color::Yellow, std::string("Suspicious JVM flag -- ") + sf.flag + " (" + sf.desc + ")" });
+                findings.push_back({ util::Severity::Warning, std::string("Suspicious JVM flag -- ") + sf.flag + " (" + sf.desc + ")" });
             }
         }
         return findings;
-    }
-
-    inline void runJvmScan() {
-        auto procs = findJavaProcesses();
-        if (procs.empty()) {
-            con::line("No running java/javaw process found. Is Minecraft open?", con::Color::Yellow);
-            return;
-        }
-
-        con::header("JVM Flag / Injected Agent Scan");
-        bool anyFinding = false;
-
-        for (const auto& p : procs) {
-            std::string cmdLine = getCommandLine(p.pid);
-            // Safe wide-to-narrow for the exe name display
-            int exeLen = WideCharToMultiByte(CP_UTF8, 0, p.exeName.c_str(), -1, nullptr, 0, nullptr, nullptr);
-            std::string exeNameA(exeLen > 0 ? exeLen - 1 : 0, '\0');
-            if (exeLen > 0) WideCharToMultiByte(CP_UTF8, 0, p.exeName.c_str(), -1, exeNameA.data(), exeLen, nullptr, nullptr);
-            std::cout << "PID " << p.pid << " (" << exeNameA << "):\n";
-
-            if (cmdLine.empty()) {
-                con::line("  Couldn't read command line (access denied, or PowerShell/WMI unavailable).", con::Color::Gray);
-                continue;
-            }
-
-            auto findings = analyzeCommandLine(cmdLine);
-            if (findings.empty()) {
-                con::line("  No suspicious JVM flags or unrecognized agents found.", con::Color::Green);
-            } else {
-                anyFinding = true;
-                for (const auto& f : findings) con::line("  [!] " + f.text, f.severity);
-            }
-        }
-
-        if (anyFinding) {
-            con::line("\nSuspicious JVM flags found -- an agent-based injection method may be in use.", con::Color::Red);
-        }
     }
 
 } // namespace jvmscan

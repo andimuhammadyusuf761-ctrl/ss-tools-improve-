@@ -6,25 +6,23 @@
 #include <vector>
 #include <algorithm>
 #include <iostream>
+#include "Util.h"
 
 // ---- helpers -------------------------------------------------------------
 
-static std::string toLower(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
-    return s;
-}
+using util::toLowerA;
+using util::containsAny;
 
-static bool containsAny(const std::string& haystackLower, const std::vector<std::string>& needlesLower) {
-    for (const auto& n : needlesLower) {
-        if (haystackLower.find(n) != std::string::npos) return true;
-    }
-    return false;
-}
+// kept as a thin alias so existing call sites (`toLower(...)`) don't all
+// need renaming -- toLowerA is the canonical name shared with the other
+// scan modules now.
+static inline std::string toLower(std::string s) { return util::toLowerA(std::move(s)); }
 
 struct MacroHit {
     std::string source;   // "process", "window", "installed"
     std::string name;     // what matched
-    DWORD pid = 0;        // only for process hits
+    DWORD pid = 0;        // only for process/window hits
+    HWND hwnd = nullptr;  // only for window hits -- used to bring to foreground
 };
 
 // ---- 1. running processes (covers 198M Macro / Zenith Macro running in background) ----
@@ -67,7 +65,7 @@ static BOOL CALLBACK enumWindowsProc(HWND hwnd, LPARAM lParam) {
     if (containsAny(lower, *ctx->keywords)) {
         DWORD pid = 0;
         GetWindowThreadProcessId(hwnd, &pid);
-        ctx->hits->push_back({ "window", std::string(title, len), pid });
+        ctx->hits->push_back({ "window", std::string(title, len), pid, hwnd });
     }
     return TRUE;
 }
@@ -123,31 +121,77 @@ static std::vector<MacroHit> scanInstalledPrograms(const std::vector<std::string
     return hits;
 }
 
-// ---- combined entry point ----
+// ---- window focus helpers ------------------------------------------
+// When the scanner finds a macro tool already running, it calls
+// bringMacroWindowToForeground() to surface that window so the
+// SS-er can see it on screen without the suspect being able to
+// hide/minimize it first.
+
+// Helper: find the main visible window belonging to a given PID.
+struct FindHwndCtx { DWORD pid; HWND result; };
+
+static BOOL CALLBACK findMainWindowProc(HWND hwnd, LPARAM lParam) {
+    auto* ctx = reinterpret_cast<FindHwndCtx*>(lParam);
+    if (!IsWindowVisible(hwnd)) return TRUE;
+    // Only want top-level windows that have a title
+    char title[256];
+    if (GetWindowTextA(hwnd, title, sizeof(title)) == 0) return TRUE;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == ctx->pid) {
+        ctx->result = hwnd;
+        return FALSE; // stop enumeration -- found it
+    }
+    return TRUE;
+}
+
+static HWND findMainWindowForPid(DWORD pid) {
+    FindHwndCtx ctx{ pid, nullptr };
+    EnumWindows(findMainWindowProc, reinterpret_cast<LPARAM>(&ctx));
+    return ctx.result;
+}
+
+// Bring the macro app window to the foreground so the SS-er can see it.
+// Uses SetForegroundWindow + ShowWindow(SW_RESTORE) so it works even
+// if the suspect minimized it to tray. Returns true if a window was found
+// and brought up, false if the process has no visible window (e.g. it's
+// a background service / tray-only app -- in that case the process is
+// still flagged, just no window to show).
+static bool bringMacroWindowToForeground(const MacroHit& hit) {
+    HWND hwnd = hit.hwnd;
+
+    // If we only have a process hit (not a window hit), search by PID
+    if (!hwnd && hit.pid != 0) {
+        hwnd = findMainWindowForPid(hit.pid);
+    }
+    if (!hwnd) return false;
+
+    // Restore if minimized, then force to foreground
+    if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+    SetForegroundWindow(hwnd);
+    BringWindowToTop(hwnd);
+
+    // SetForegroundWindow can be blocked by Windows if the calling
+    // process doesn't have focus itself. The SPI_SETFOREGROUNDLOCKTIMEOUT
+    // workaround: briefly allow any process to steal focus.
+    DWORD lockTimeout = 0;
+    SystemParametersInfo(SPI_GETFOREGROUNDLOCKTIMEOUT, 0, &lockTimeout, 0);
+    SystemParametersInfo(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, nullptr, 0);
+    SetForegroundWindow(hwnd);
+    SystemParametersInfo(SPI_SETFOREGROUNDLOCKTIMEOUT, lockTimeout, nullptr, 0);
+
+    return true;
+}
+
+// ---- canonical keyword list -----------------------------------------
+// The single source of truth for macro-tool keywords: used by
+// scanRunningProcesses/scanWindowTitles/scanInstalledPrograms above, by
+// main.cpp's runMacroSoftwareScan(), and by MacroSignature.h's on-disk
+// signature sweep. Previously main.cpp also carried its own local copy
+// of this same list, which is exactly the kind of drift-prone
+// duplication that leads to the two scans quietly disagreeing over time.
 static const std::vector<std::string> macroKeywords = {
     "198m macro",      // "198M Macros"
     "198macro",
     "zenith macro",    // "Zenith Macros"
 };
-
-static void runMacroScan() {
-    std::cout << "\n[Macro Scan] Checking running processes, window titles, and installed programs...\n";
-
-    auto procHits = scanRunningProcesses(macroKeywords);
-    auto winHits = scanWindowTitles(macroKeywords);
-    auto installHits = scanInstalledPrograms(macroKeywords);
-
-    size_t total = procHits.size() + winHits.size() + installHits.size();
-
-    for (const auto& h : procHits)
-        std::cout << "[!] Running process match: " << h.name << " (PID " << h.pid << ")\n";
-    for (const auto& h : winHits)
-        std::cout << "[!] Window title match: " << h.name << " (PID " << h.pid << ")\n";
-    for (const auto& h : installHits)
-        std::cout << "[!] Installed program match: " << h.name << "\n";
-
-    if (total == 0)
-        std::cout << "No macro software traces found.\n";
-    else
-        std::cout << "Total traces found: " << total << "\n";
-}

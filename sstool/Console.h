@@ -111,6 +111,31 @@ namespace con {
     inline void info(const std::string& text) { set(Color::Cyan);   std::cout << "  [*] "; reset(); std::cout << text << "\n"; }
     inline void dim(const std::string& text)  { set(Color::Gray);   std::cout << "      " << text; reset(); std::cout << "\n"; }
 
+    // Unified finding renderer: every scan module (ModuleScan, SystemForensics,
+    // MacroSignature, ...) now shares util::Severity, so results can be printed
+    // through one call instead of each scan function hand-rolling its own
+    // "if Danger -> bad() else if Warning -> warn() else info()" chain.
+    template <typename SeverityT>
+    inline void finding(SeverityT severity, const std::string& text) {
+        switch (static_cast<int>(severity)) {
+            case 2: bad(text);  break; // Danger
+            case 1: warn(text); break; // Warning
+            default: info(text); break; // Info
+        }
+    }
+
+    // A short colored tag, e.g. "[DANGER]" / "[WARN]" / "[INFO]" -- used
+    // when a finding needs to sit inline with other context on the same
+    // line rather than owning the whole line via finding()/bad()/warn().
+    template <typename SeverityT>
+    inline std::string badge(SeverityT severity) {
+        switch (static_cast<int>(severity)) {
+            case 2: return "[DANGER]";
+            case 1: return "[WARN]";
+            default: return "[INFO]";
+        }
+    }
+
     // Numbered menu item
     inline void menuItem(int n, const std::string& text, Color c = Color::White) {
         set(Color::Cyan);
@@ -178,6 +203,40 @@ namespace con {
             std::cout << "  RESULT:  FLAGGED -- " << hits << " " << context << " detected.\n";
             divider('=', 60, Color::Red);
         }
+        reset();
+    }
+
+    // ---- Boxed banner --------------------------------------------------
+    // Draws a bordered box of fixed inner width, one centered line per
+    // entry in `lines`. Used for the startup banner; kept separate from
+    // header() since the banner needs multiple centered lines instead of
+    // header()'s single title line.
+    inline void box(const std::vector<std::string>& lines, int width = 60, Color c = Color::Cyan) {
+        std::cout << "\n";
+        set(c);
+        std::cout << "  +" << std::string(width - 2, '-') << "+\n";
+        for (const auto& line : lines) {
+            int pad = (width - 2 - (int)line.size());
+            int left = pad / 2;
+            int right = pad - left;
+            if (left < 0) left = 0;
+            if (right < 0) right = 0;
+            std::cout << "  |" << std::string(left, ' ') << line << std::string(right, ' ') << "|\n";
+        }
+        std::cout << "  +" << std::string(width - 2, '-') << "+\n";
+        reset();
+    }
+
+    // "  Key ......... value" -- aligned status line, used for the
+    // banner's "Admin: yes/no" / "Scans: read-only" style status rows.
+    inline void statusLine(const std::string& key, const std::string& value, Color valueColor = Color::White, int keyWidth = 18) {
+        set(Color::Gray);
+        std::cout << "    " << key;
+        int pad = keyWidth - (int)key.size();
+        if (pad > 0) std::cout << std::string(pad, '.');
+        std::cout << " ";
+        set(valueColor);
+        std::cout << value << "\n";
         reset();
     }
 

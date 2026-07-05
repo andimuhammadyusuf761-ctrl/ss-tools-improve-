@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <cstdint>
 
+#include "Console.h"
+
 // One matched string, with enough context to explain *why* it matched.
 struct PatternHit {
     uintptr_t address = 0;
@@ -69,14 +71,32 @@ std::vector<PatternHit> pattern_scan(HANDLE hProcess, const std::vector<std::str
 
     auto reportHit = [&](uintptr_t addr, std::string_view patternText, bool isUtf16, bool isBoundary) {
         if (!foundAddresses.insert(addr).second) return; // already reported (e.g. same offset in both scans)
-        std::cout << "[*] Found string \"" << patternText << "\""
-                   << (isUtf16 ? " (utf16)" : "")
-                   << (isBoundary ? " (boundary)" : "")
-                   << " at " << std::hex << std::uppercase << addr << std::dec << "\n";
+        // Note: intentionally not printed here -- the caller (runMemoryScan)
+        // renders the full styled result list once scanning finishes, so
+        // printing per-hit here would just duplicate that output in a
+        // different, unstyled format.
         results.push_back(PatternHit{ addr, std::string(patternText), isUtf16, isBoundary });
     };
 
     while (address < sys_info.lpMaximumApplicationAddress && VirtualQueryEx(hProcess, address, &memInfo, sizeof(memInfo))) {
+        // Lightweight progress feedback -- this walk can take a real,
+        // human-noticeable amount of time on a JVM with several GB
+        // committed, and previously gave zero indication anything was
+        // happening until it finished. Ticks off current address vs. the
+        // full application address range; only updates the spinner frame
+        // every so often so it doesn't itself become the bottleneck.
+        {
+            static int tick = 0;
+            if ((++tick & 0x3F) == 0) {
+                uintptr_t lo = reinterpret_cast<uintptr_t>(sys_info.lpMinimumApplicationAddress);
+                uintptr_t hi = reinterpret_cast<uintptr_t>(sys_info.lpMaximumApplicationAddress);
+                uintptr_t cur = reinterpret_cast<uintptr_t>(address);
+                int pct = hi > lo ? (int)(((cur - lo) * 100) / (hi - lo)) : 0;
+                con::spinnerTick("Scanning memory... " + std::to_string(pct) + "%  (" +
+                    std::to_string(results.size()) + " hit(s) so far)");
+            }
+        }
+
         // Widened from MEM_PRIVATE-only: class/string data relevant to a
         // loaded cheat mod can also live in MEM_MAPPED regions (e.g. memory
         // mapped from the jar/class files themselves, or mapped heap
@@ -159,5 +179,6 @@ std::vector<PatternHit> pattern_scan(HANDLE hProcess, const std::vector<std::str
         address = reinterpret_cast<uint8_t*>(memInfo.BaseAddress) + memInfo.RegionSize;
     }
 
+    con::spinnerClear();
     return results;
 }
