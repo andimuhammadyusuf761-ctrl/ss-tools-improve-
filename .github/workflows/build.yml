@@ -1,28 +1,24 @@
-name: Build Standalone EXE
+name: Build GUI Version
 
 on:
   push:
-    branches: [ main, master ]
-  pull_request:
     branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
-
     steps:
     - uses: actions/checkout@v4
-
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v2
-
-    - name: Build with MSBuild
-      run: msbuild sstool.sln /p:Configuration=Release /p:Platform=x64 /p:RuntimeLibrary=MultiThreaded
-
+    - name: Restore NuGet
+      run: nuget restore sstool.sln
+    - name: Build Release x64
+      run: msbuild sstool.sln /p:Configuration=Release /p:Platform=x64 /p:RuntimeLibrary=MultiThreaded /m
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: sstool-standalone
+        name: sstool-gui-standalone
         path: x64/Release/sstool.exe
         
